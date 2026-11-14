@@ -1,0 +1,28 @@
+name: Build PS3
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: ps3dev/ps3dev:latest
+    steps:
+      - name: Baixar o codigo
+        uses: actions/checkout@v4
+
+      - name: Compilar
+        run: |
+          mkdir -p build
+          powerpc64-ps3-elf-gcc main.c -o build/main.elf \
+            -I$PSL1GHT/ppu/include -I$PS3DEV/portlibs/ppu/include \
+            -L$PSL1GHT/ppu/lib -lrsx -lgcm_sys -lio -lsysutil -lrt -llv2 -lm
+
+      - name: Guardar o resultado
+        uses: actions/upload-artifact@v4
+        with:
+          name: ps3-build
+          path: build/main.elf
