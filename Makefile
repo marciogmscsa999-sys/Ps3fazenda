@@ -3,7 +3,8 @@ TITLE    = Fazenda PS3
 APPID    = FARM00001
 CONTENTID = UP0001-$(APPID)_00-0000000000000000
 
-CFLAGS   = -O2 -Wall -mcpu=cell -std=gnu99
+CFLAGS   = -O2 -Wall -mcpu=cell -std=gnu99 -I$(PSL1GHT)/ppu/include -I$(PS3DEV)/portlibs/ppu/include
+LDFLAGS  = -L$(PSL1GHT)/ppu/lib
 LIBS     = -lrsx -lgcm_sys -lio -lsysutil -lrt -llv2 -lm
 
 OFILES   = main.o
