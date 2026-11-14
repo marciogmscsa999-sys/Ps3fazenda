@@ -9,7 +9,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     container:
-      image: mlafeldt/ps3dev:latest
+      image: zeldin/ps3dev-docker
     steps:
       - name: Baixar o codigo
         uses: actions/checkout@v4
