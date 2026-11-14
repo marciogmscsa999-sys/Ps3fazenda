@@ -1,0 +1,39 @@
+name: Build PS3
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Baixar o codigo
+        uses: actions/checkout@v4
+
+      - name: Instalar dependencias
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y make gcc libgmp10 libmpfr6 libmpc3 libelf1 zlib1g python3
+
+      - name: Baixar ferramentas do PS3
+        run: |
+          curl -sL https://github.com/bucanero/ps3toolchain/releases/download/ubuntu-latest-fad3b5fb/ps3dev-ubuntu-latest-2020-08-31.tar.gz | tar xz -C ./
+          ls ps3dev
+
+      - name: Compilar
+        run: |
+          export PS3DEV=$PWD/ps3dev
+          export PSL1GHT=$PS3DEV
+          export PATH=$PATH:$PS3DEV/bin:$PS3DEV/ppu/bin
+          mkdir -p build
+          powerpc64-ps3-elf-gcc main.c -o build/main.elf \
+            -I$PSL1GHT/ppu/include -I$PS3DEV/portlibs/ppu/include \
+            -L$PSL1GHT/ppu/lib -lrsx -lgcm_sys -lio -lsysutil -lrt -llv2 -lm
+
+      - name: Guardar o resultado
+        uses: actions/upload-artifact@v4
+        with:
+          name: ps3-build
+          path: build/main.elf
