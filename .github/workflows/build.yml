@@ -15,7 +15,7 @@ jobs:
       - name: Instalar dependencias
         run: |
           sudo apt-get update
-          sudo apt-get install -y make gcc libgmp10 libmpfr6 libmpc3 libelf1 zlib1g python3 python-is-python3
+          sudo apt-get install -y make gcc libgmp10 libmpfr6 libmpc3 libelf1 zlib1g python2.7
 
       - name: Baixar ferramentas do PS3
         run: |
@@ -30,6 +30,7 @@ jobs:
           make pkg
 
       - name: Guardar o resultado
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: ps3-build
