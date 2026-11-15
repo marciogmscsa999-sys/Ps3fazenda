@@ -25,13 +25,6 @@ static void sysutil_cb(u64 status, u64 param, void *usrdata)
         running = 0;
 }
 
-static void wait_flip(void)
-{
-    while (gcmGetFlipStatus() != 0)
-        usleep(200);
-    gcmResetFlipStatus();
-}
-
 static void init_video(void)
 {
     videoState state;
@@ -61,8 +54,6 @@ static void init_video(void)
         rsxAddressToOffset(fb_addr[i], &fb_offset[i]);
         gcmSetDisplayBuffer(i, fb_offset[i], fb_pitch, fb_width, fb_height);
     }
-
-    gcmResetFlipStatus();
 }
 
 static void fill_rect(int x, int y, int w, int h, u32 color)
@@ -148,14 +139,11 @@ int main(int argc, char *argv[])
             if (paddata.BTN_DOWN)  py += 6;
         }
 
-        wait_flip();
         draw_map();
         draw_player(px, py);
         flip_screen();
     }
 
-    gcmSetWaitFlip(context);
-    rsxFinish(context, 0);
     ioPadEnd();
     sysUtilUnregisterCallback(0);
     exit(0);
