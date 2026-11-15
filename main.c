@@ -55,11 +55,21 @@ static void init_video(void)
     }
 }
 
-static void draw_screen(void)
+static void draw_screen(int px, int py)
 {
     u32 *buf = fb_addr[curr_fb];
+
     for (u32 i = 0; i < fb_width * fb_height; i++)
         buf[i] = 0x00336699;
+
+    for (int j = 0; j < 50; j++) {
+        for (int i = 0; i < 50; i++) {
+            int x = px + i;
+            int y = py + j;
+            if (x >= 0 && x < (int)fb_width && y >= 0 && y < (int)fb_height)
+                buf[y * fb_width + x] = 0x0000FF00;
+        }
+    }
 }
 
 static void flip_screen(void)
@@ -72,7 +82,9 @@ static void flip_screen(void)
 
 int main(int argc, char *argv[])
 {
+    padInfo padinfo;
     padData paddata;
+    int px = 200, py = 200;
 
     sysUtilRegisterCallback(0, sysutil_cb, NULL);
     ioPadInit(7);
@@ -80,10 +92,29 @@ int main(int argc, char *argv[])
 
     while (running) {
         sysUtilCheckCallback();
-        ioPadGetData(0, &paddata);
-        if (paddata.BTN_START)
-            running = 0;
-        draw_screen();
+        ioPadGetInfo(&padinfo);
+
+        if (padinfo.status[0]) {
+            ioPadGetData(0, &paddata);
+
+            if (paddata.BTN_START)
+                running = 0;
+
+            int dx = (int)paddata.ANA_L_H - 128;
+            int dy = (int)paddata.ANA_L_V - 128;
+
+            if (dx > 20 || dx < -20)
+                px += dx / 16;
+            if (dy > 20 || dy < -20)
+                py += dy / 16;
+
+            if (paddata.BTN_LEFT)  px -= 6;
+            if (paddata.BTN_RIGHT) px += 6;
+            if (paddata.BTN_UP)    py -= 6;
+            if (paddata.BTN_DOWN)  py += 6;
+        }
+
+        draw_screen(px, py);
         flip_screen();
     }
 
