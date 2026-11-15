@@ -25,6 +25,13 @@ static void sysutil_cb(u64 status, u64 param, void *usrdata)
         running = 0;
 }
 
+static void wait_flip(void)
+{
+    while (gcmGetFlipStatus() != 0)
+        usleep(200);
+    gcmResetFlipStatus();
+}
+
 static void init_video(void)
 {
     videoState state;
@@ -54,6 +61,8 @@ static void init_video(void)
         rsxAddressToOffset(fb_addr[i], &fb_offset[i]);
         gcmSetDisplayBuffer(i, fb_offset[i], fb_pitch, fb_width, fb_height);
     }
+
+    gcmResetFlipStatus();
 }
 
 static void fill_rect(int x, int y, int w, int h, u32 color)
@@ -84,20 +93,17 @@ static void draw_map(void)
         }
     }
 
-    /* arvore: tronco e copa */
     fill_rect(5 * TILE + 24, 3 * TILE + 32, 16, 40, 0x00654321);
     fill_rect(5 * TILE, 3 * TILE - 20, 64, 56, 0x00206020);
-
-    /* pedra */
     fill_rect(10 * TILE, 6 * TILE, 48, 32, 0x00888888);
 }
 
 static void draw_player(int px, int py)
 {
-    fill_rect(px + 12, py, 24, 20, 0x00F0C8A0);       /* cabeca */
-    fill_rect(px + 8, py + 20, 32, 28, 0x00D03030);   /* corpo */
-    fill_rect(px + 10, py + 48, 12, 16, 0x00303080);  /* perna esq */
-    fill_rect(px + 26, py + 48, 12, 16, 0x00303080);  /* perna dir */
+    fill_rect(px + 12, py, 24, 20, 0x00F0C8A0);
+    fill_rect(px + 8, py + 20, 32, 28, 0x00D03030);
+    fill_rect(px + 10, py + 48, 12, 16, 0x00303080);
+    fill_rect(px + 26, py + 48, 12, 16, 0x00303080);
 }
 
 static void flip_screen(void)
@@ -142,11 +148,15 @@ int main(int argc, char *argv[])
             if (paddata.BTN_DOWN)  py += 6;
         }
 
+        wait_flip();
         draw_map();
         draw_player(px, py);
         flip_screen();
     }
 
+    gcmSetWaitFlip(context);
+    rsxFinish(context, 0);
     ioPadEnd();
-    return 0;
+    sysUtilUnregisterCallback(0);
+    exit(0);
 }
