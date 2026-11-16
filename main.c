@@ -16,7 +16,18 @@
 #define FARM_R0    1
 #define FARM_W     4
 #define FARM_H     3
-#define DAY_FRAMES 1200
+
+/* Tempo: 20 horas de jogo = 6:00 as 2:00
+   1 hora real = ~42s. Para simplificar: 10 min de jogo = ~7s reais.
+   A 60fps, 7s = 420 frames. Entao 10 min de jogo = 420 frames.
+   1 dia = 120 * 420 = 50400 frames. Mas isso e muito.
+   Vou usar uma escala mais rapida para o jogo nao ficar eterno:
+   10 min de jogo = 60 frames (1s real). 1 hora = 360 frames (6s).
+   1 dia (20h) = 7200 frames (2 min reais). Ajustavel. */
+
+#define FRAMES_PER_10MIN 30
+#define FRAMES_PER_HOUR  (6 * FRAMES_PER_10MIN)
+
 #define WATER_MAX  20
 #define ENERGY_MAX 100
 
@@ -34,6 +45,7 @@ static u32 fb_pitch, fb_width, fb_height;
 static u32 *cache = NULL;
 static u32 *target = NULL;
 
+/* Estado do jogo */
 static unsigned char farm_state[FARM_H][FARM_W];
 static unsigned char farm_water[FARM_H][FARM_W];
 static int colheita = 0;
@@ -41,15 +53,21 @@ static int moedas = 0;
 static int energia = ENERGY_MAX;
 static int agua_regador = WATER_MAX;
 static int dia = 1;
-static int frames_dia = 0;
 static int pl_x = 0, pl_y = 0;
 static int flash_timer = 0;
 static int chovendo = 0;
 static int chuva_timer = 0;
 static int estacao = 0; /* 0=Primavera 1=Verao 2=Outono 3=Inverno */
-static int hoe_level = 1; /* 1,2,3 */
+static int hoe_level = 1;
 static int can_level = 1;
 static int exausto = 0;
+
+/* Tempo */
+static int tempo_frames = 0;     /* frames desde 6:00 */
+static int hora_atual = 6;       /* 6 a 26 (26 = 2:00) */
+static int minuto_atual = 0;
+static int escuro = 0;           /* 0 a 100, quanto escurecer */
+static int desmaiou = 0;
 
 static const char *const world[MAP_H] = {
     "............HHHH....",
@@ -66,7 +84,7 @@ static const char *const world[MAP_H] = {
     "..............wwwwww"
 };
 
-/* ===== SPRITES (mantidos do original + novos) ===== */
+/* ===== SPRITES (mantidos) ===== */
 static const char *const spr_tuftA[16] = {
     "................","................","................","................",
     "......h.........","......h.h.......",".....hGhGh......","................",
@@ -180,11 +198,8 @@ static u32 pal(char ch)
     case 'i': return 0x00D03030; case 'I': return 0x00A02020;
     case 'j': return 0x003A4A9A; case 'Q': return 0x002F7A28;
     case 'P': return 0x00387A2E;
-    /* Estações */
-    case '1': return 0x0055AA33; /* Primavera verde */
-    case '2': return 0x0088CC44; /* Verao */
-    case '3': return 0x00CC8833; /* Outono */
-    case '4': return 0x00DDDDEE; /* Inverno */
+    case '1': return 0x0055AA33; case '2': return 0x0088CC44;
+    case '3': return 0x00CC8833; case '4': return 0x00DDDDEE;
     default:  return 0x00FF00FF;
     }
 }
@@ -254,6 +269,21 @@ static void shade_rect(int x, int y, int w, int h)
             u32 b = (p & 0xFF) * 3 / 4;
             buf[yy * fb_width + xx] = (r << 16) | (g << 8) | b;
         }
+    }
+}
+
+/* Escurece a tela inteira para simular noite */
+static void darken_screen(int amount)
+{
+    if (amount <= 0) return;
+    u32 *buf = target;
+    u32 n = fb_width * fb_height;
+    for (u32 i = 0; i < n; i++) {
+        u32 p = buf[i];
+        u32 r = ((p >> 16) & 0xFF) * (100 - amount) / 100;
+        u32 g = ((p >> 8) & 0xFF) * (100 - amount) / 100;
+        u32 b = (p & 0xFF) * (100 - amount) / 100;
+        buf[i] = (r << 16) | (g << 8) | b;
     }
 }
 
@@ -444,44 +474,94 @@ static void draw_player(int dir, int anim)
     }
 }
 
+/* Desenha um dígito em blocos (fonte 3x5) */
+static void draw_digit(int dx, int dy, int num, u32 cor)
+{
+    static const unsigned char font[10][5] = {
+        {0b111,0b101,0b101,0b101,0b111}, /* 0 */
+        {0b010,0b110,0b010,0b010,0b111}, /* 1 */
+        {0b111,0b001,0b111,0b100,0b111}, /* 2 */
+        {0b111,0b001,0b111,0b001,0b111}, /* 3 */
+        {0b101,0b101,0b111,0b001,0b001}, /* 4 */
+        {0b111,0b100,0b111,0b001,0b111}, /* 5 */
+        {0b111,0b100,0b111,0b101,0b111}, /* 6 */
+        {0b111,0b001,0b010,0b010,0b010}, /* 7 */
+        {0b111,0b101,0b111,0b101,0b111}, /* 8 */
+        {0b111,0b101,0b111,0b001,0b111}  /* 9 */
+    };
+    if (num < 0 || num > 9) return;
+    for (int row = 0; row < 5; row++) {
+        for (int col = 0; col < 3; col++) {
+            if (font[num][row] & (1 << (2 - col)))
+                fill_rect(dx + col * S, dy + row * S, S, S, cor);
+        }
+    }
+}
+
+/* Relogio no canto superior direito: HH:MM */
+static void draw_clock(void)
+{
+    int h = hora_atual;
+    if (h >= 24) h -= 24; /* 24,25,26 -> 0,1,2 */
+    int m = (minuto_atual / 10) * 10;
+
+    int base_x = (int)fb_width - 40 * S;
+    int base_y = 4 * S;
+
+    /* fundo */
+    fill_rect(base_x - 4 * S, base_y - 2 * S, 38 * S, 12 * S, pal('T'));
+    fill_rect(base_x - 2 * S, base_y, 34 * S, 8 * S, pal('c'));
+
+    u32 cor = pal('z');
+
+    /* hora (2 digitos) */
+    int h1 = h / 10;
+    int h2 = h % 10;
+    if (h1 > 0) draw_digit(base_x, base_y, h1, cor);
+    draw_digit(base_x + (h1 > 0 ? 4 : 0) * S, base_y, h2, cor);
+
+    /* dois pontos */
+    int colon_x = base_x + (h1 > 0 ? 8 : 4) * S;
+    fill_rect(colon_x, base_y + 1 * S, S, S, cor);
+    fill_rect(colon_x, base_y + 3 * S, S, S, cor);
+
+    /* minutos (2 digitos) */
+    int m1 = m / 10;
+    int m2 = m % 10;
+    draw_digit(colon_x + 2 * S, base_y, m1, cor);
+    draw_digit(colon_x + 6 * S, base_y, m2, cor);
+}
+
+/* HUD esquerda: energia, agua, dia, estacao */
 static void draw_hud(void)
 {
-    art_rect(1, 1, 66, 20, 'T');
-    art_rect(2, 2, 64, 18, 'c');
+    art_rect(1, 1, 50, 20, 'T');
+    art_rect(2, 2, 48, 18, 'c');
+
+    /* Energia */
+    int e = energia * 44 / ENERGY_MAX;
+    art_rect(3, 10, 44, 2, 'S');
+    art_rect(3, 10, e, 2, (energia < 20) ? 'i' : 'h');
+
+    /* Agua */
+    int w = agua_regador * 44 / WATER_MAX;
+    art_rect(3, 13, 44, 1, 'S');
+    art_rect(3, 13, w, 1, 'v');
 
     /* Moedas */
-    int m = moedas / 5; if (m > 12) m = 12;
+    int m = moedas / 5; if (m > 8) m = 8;
     for (int i = 0; i < m; i++) art_rect(3 + i * 5, 3, 4, 3, 'y');
 
     /* Colheita */
-    int n = colheita; if (n > 12) n = 12;
+    int n = colheita; if (n > 8) n = 8;
     for (int i = 0; i < n; i++) art_rect(3 + i * 5, 7, 3, 2, 'r');
 
-    /* Energia (barra) */
-    int e = energia * 60 / ENERGY_MAX;
-    art_rect(3, 10, 60, 2, 'S');
-    art_rect(3, 10, e, 2, (energia < 20) ? 'i' : 'h');
-
-    /* Agua do regador */
-    int w = agua_regador * 60 / WATER_MAX;
-    art_rect(3, 13, 60, 1, 'S');
-    art_rect(3, 13, w, 1, 'v');
-
-    /* Barra de dia */
-    int dp = frames_dia * 60 / DAY_FRAMES;
-    art_rect(3, 15, 60, 1, 'S');
-    art_rect(3, 15, dp, 1, chovendo ? 'w' : 'o');
-
-    /* Indicador de estacao */
+    /* Estacao (4 blocos) */
     char est = (estacao == 0) ? 'h' : (estacao == 1) ? 'y' : (estacao == 2) ? 'o' : 'x';
     for (int i = 0; i < 4; i++) {
-        if (i == estacao) art_rect(60 + i * 2, 3, 1, 1, est);
-        else art_rect(60 + i * 2, 3, 1, 1, 'S');
+        if (i == estacao) art_rect(44 + i * 2, 3, 1, 1, est);
+        else art_rect(44 + i * 2, 3, 1, 1, 'S');
     }
-
-    /* Nivel de ferramentas (pequeno) */
-    for (int i = 0; i < hoe_level; i++) art_rect(3 + i * 2, 17, 1, 1, 's');
-    for (int i = 0; i < can_level; i++) art_rect(10 + i * 2, 17, 1, 1, 'v');
 }
 
 static void draw_flash(void)
@@ -544,7 +624,6 @@ static int perto_do_lago(int px, int py)
            tile_at(c, r + 1) == 'w';
 }
 
-/* NOVO: acao da fazenda com ferramentas e energia */
 static void acao_fazenda(int px, int py, int cross, int square, int circle)
 {
     int col = (px + 6 * S) / TILE - FARM_C0;
@@ -567,7 +646,6 @@ static void acao_fazenda(int px, int py, int cross, int square, int circle)
 
     if (square && agua_regador > 0 && !farm_water[row][col] && energia >= 1) {
         if (*st >= 1 && *st <= 3) {
-            /* Regador nivel 1 molha 1 tile; nivel 2 molha 3 em linha; nivel 3 area 3x3 */
             int dx = 0, dy = 0;
             if (can_level == 1) { dx = 0; dy = 0; }
             else if (can_level == 2) { dx = 1; dy = 0; }
@@ -599,46 +677,83 @@ static void vender_tudo(void)
     flash_timer = 10;
 }
 
+/* Atualiza hora/minuto e escurecimento */
+static void atualiza_tempo(void)
+{
+    tempo_frames++;
+
+    /* 6:00 = frame 0. Cada FRAMES_PER_10MIN avanca 10 min */
+    int total_min = (tempo_frames / FRAMES_PER_10MIN) * 10;
+    int h = 6 + total_min / 60;
+    int m = total_min % 60;
+
+    if (h >= 26) {
+        /* 2:00 - desmaio */
+        h = 26; m = 0;
+        if (!desmaiou) {
+            desmaiou = 1;
+            /* perde 10% das moedas, max 1000 */
+            int perda = moedas / 10;
+            if (perda > 1000) perda = 1000;
+            moedas -= perda;
+            energia = ENERGY_MAX / 2;
+            flash_timer = 30;
+        }
+    }
+
+    hora_atual = h;
+    minuto_atual = m;
+
+    /* Escurecimento baseado na estacao */
+    /* Primavera/Verao: escurece as 20:00. Outono: 19:00. Inverno: 18:00 */
+    int hora_escurecer = (estacao == 0 || estacao == 1) ? 20 : (estacao == 2) ? 19 : 18;
+    if (h >= hora_escurecer) {
+        int horas_escuras = h - hora_escurecer;
+        escuro = horas_escuras * 15; /* cada hora escurece 15% */
+        if (escuro > 75) escuro = 75;
+    } else {
+        escuro = 0;
+    }
+}
+
 static void dormir(void)
 {
     if (!perto_da_casa(pl_x, pl_y)) return;
-    dia++;
-    frames_dia = 0;
-    /* energia: se exausto, recupera so metade */
-    if (exausto) energia = ENERGY_MAX / 2;
-    else energia = ENERGY_MAX;
+
+    /* Calcula energia recuperada baseada na hora */
+    /* Antes da meia-noite: 100%. Depois: proporcional */
+    int h = hora_atual;
+    if (h >= 26) h = 26;
+    if (h <= 24) {
+        energia = ENERGY_MAX;
+    } else {
+        /* 24:00 a 26:00 -> 100% a 50% */
+        int frac = (h - 24) * 50 / 2; /* 0 a 50 */
+        energia = ENERGY_MAX * (100 - frac) / 100;
+    }
     exausto = 0;
+    desmaiou = 0;
+
+    /* Avanca dia */
+    dia++;
+    tempo_frames = 0;
+    hora_atual = 6;
+    minuto_atual = 0;
+
+    /* Fazenda cresce */
     for (int r = 0; r < FARM_H; r++)
         for (int c = 0; c < FARM_W; c++) {
             if ((farm_state[r][c] == 2 || farm_state[r][c] == 3) && farm_water[r][c])
                 farm_state[r][c]++;
             farm_water[r][c] = 0;
         }
-    /* muda estacao a cada 5 dias */
+
+    /* Muda estacao a cada 5 dias */
     if (dia % 5 == 0) {
         estacao = (estacao + 1) % 4;
         if (cache) { target = cache; draw_static_world(); }
     }
     flash_timer = 12;
-}
-
-static void passa_dia(void)
-{
-    dia++;
-    frames_dia = 0;
-    if (energia <= 0) exausto = 1;
-    if (exausto) energia = ENERGY_MAX / 2;
-    else energia = ENERGY_MAX;
-    for (int r = 0; r < FARM_H; r++)
-        for (int c = 0; c < FARM_W; c++) {
-            if ((farm_state[r][c] == 2 || farm_state[r][c] == 3) && farm_water[r][c])
-                farm_state[r][c]++;
-            farm_water[r][c] = 0;
-        }
-    if (dia % 5 == 0) {
-        estacao = (estacao + 1) % 4;
-        if (cache) { target = cache; draw_static_world(); }
-    }
 }
 
 static void flip_screen(void)
@@ -729,7 +844,6 @@ int main(int argc, char *argv[])
         int seq = (anim_t / 6) & 3;
         int anim = (seq == 1) ? 1 : (seq == 3) ? 2 : 0;
 
-        /* exausto deixa lento */
         if (exausto) { mx /= 2; my /= 2; }
 
         if (!colide(px + mx, py)) px += mx;
@@ -740,7 +854,6 @@ int main(int argc, char *argv[])
         if (px > (int)fb_width - pw) px = fb_width - pw;
         if (py > (int)fb_height - ph) py = fb_height - ph;
 
-        /* R2 = upgrade de ferramenta perto da casa */
         if (r2 && perto_da_casa(px, py)) {
             if (moedas >= 100) {
                 moedas -= 100;
@@ -754,7 +867,15 @@ int main(int argc, char *argv[])
         if (l1) vender_tudo();
         if (r1) dormir();
 
-        frames_dia++;
+        /* Avanca tempo */
+        if (!desmaiou) atualiza_tempo();
+
+        /* Se desmaiou, forca dormir */
+        if (desmaiou) {
+            dormir();
+            px = 6 * TILE; py = 4 * TILE;
+        }
+
         chuva_timer++;
         if (!chovendo && chuva_timer > 1800) {
             chovendo = 1; chuva_timer = 0;
@@ -768,8 +889,6 @@ int main(int argc, char *argv[])
         if (energia <= 0) exausto = 1;
         if (energia < -15) energia = -15;
 
-        if (frames_dia >= DAY_FRAMES) passa_dia();
-
         frame_count++;
         wait_flip();
 
@@ -782,7 +901,12 @@ int main(int argc, char *argv[])
         draw_player(dir, anim);
         draw_canopies();
         draw_rain();
+
+        /* Escurece conforme hora */
+        if (escuro > 0) darken_screen(escuro);
+
         draw_hud();
+        draw_clock();
         draw_flash();
         flip_screen();
     }
