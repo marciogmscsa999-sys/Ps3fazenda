@@ -10,6 +10,7 @@
 
 #define CB_SIZE    (1024 * 1024)
 #define HOST_SIZE  (32 * 1024 * 1024)
+
 #define MAP_W      20
 #define MAP_H      12
 #define FARM_C0    1
@@ -17,6 +18,7 @@
 #define FARM_W     4
 #define FARM_H     3
 #define DAY_FRAMES 900
+#define WATER_MAX  8
 
 static int S = 4;
 #define TILE (16 * S)
@@ -25,7 +27,6 @@ static gcmContextData *context = NULL;
 static void *host_addr = NULL;
 static volatile int running = 1;
 static volatile int menu_aberto = 0;
-static volatile int redesenhar = 0;
 static u32 curr_fb = 0;
 static u32 fb_offset[2];
 static u32 *fb_addr[2];
@@ -36,24 +37,33 @@ static u32 *target = NULL;
 static unsigned char farm_state[FARM_H][FARM_W];
 static unsigned char farm_water[FARM_H][FARM_W];
 static int colheita = 0;
+static int moedas = 0;
+static int agua_regador = WATER_MAX;
 static int dia = 1;
 static int frames_dia = 0;
 static int pl_x = 0, pl_y = 0;
+static int flash_timer = 0;
+static int popup_timer = 0;
+static char popup_texto[32] = "";
+static int chovendo = 0;
+static int chuva_timer = 0;
 
 static const char *const world[MAP_H] = {
     "............HHHH....",
     ".FFFF.......HHHH....",
-    ".FFFF...T...HHHH....",
+    ".FFFF..T....HHHH....",
     ".FFFF.......HHHH....",
-    "....R........p......",
-    ".........T...p......",
+    "....R......V.p......",
+    "........O....p......",
     "......pppppppp......",
-    "......p..........www" "w",
+    "......p..........www",
     "......p...R.T.wwwwww",
     "..T...........wwwwww",
     ".....R........wwwwww",
     "..............wwwwww"
 };
+
+/* ======== SPRITES (mantidos + novos) ======== */
 
 static const char *const spr_tuftA[16] = {
     "................",
@@ -302,6 +312,46 @@ static const char *const spr_grown[16] = {
     "................"
 };
 
+/* NOVO: poço */
+static const char *const spr_well[16] = {
+    "................",
+    "................",
+    "...ssssssssss...",
+    "..saaaaaaaaaas..",
+    "..saSSSSSSSSas..",
+    "..saSuuuuuuSas..",
+    "..saSuuuuuuSas..",
+    "..saSSSSSSSSas..",
+    "..saaaaaaaaaas..",
+    "...ssssssssss...",
+    "....s......s....",
+    "....s......s....",
+    "....s......s....",
+    "................",
+    "................",
+    "................"
+};
+
+/* NOVO: arbusto de frutinhas (morango silvestre) */
+static const char *const spr_bush[16] = {
+    "................",
+    "................",
+    "......kLLk......",
+    "....kLlkklLk....",
+    "...kLllkklllLk..",
+    "..kLllkrrklllLk.",
+    "..kLllkrrklllLk.",
+    "..kLllkkklllLLk.",
+    "...kLlrrlllLLk..",
+    "....kLlrllLLk...",
+    ".....kLLLLLk....",
+    "......kkkk......",
+    "................",
+    "................",
+    "................",
+    "................"
+};
+
 static u32 pal(char ch)
 {
     switch (ch) {
@@ -348,23 +398,16 @@ static u32 pal(char ch)
 
 static void sysutil_cb(u64 status, u64 param, void *usrdata)
 {
-    if (status == SYSUTIL_EXIT_GAME) {
-        running = 0;
-    } else if (status == SYSUTIL_MENU_OPEN) {
-        menu_aberto = 1;
-    } else if (status == SYSUTIL_MENU_CLOSE) {
-        menu_aberto = 0;
-        redesenhar = 10;
-    }
+    (void)param; (void)usrdata;
+    if (status == SYSUTIL_EXIT_GAME) running = 0;
+    else if (status == SYSUTIL_MENU_OPEN) menu_aberto = 1;
+    else if (status == SYSUTIL_MENU_CLOSE) menu_aberto = 0;
 }
 
 static void wait_flip(void)
 {
     int n = 0;
-    while (gcmGetFlipStatus() != 0 && n < 250) {
-        usleep(200);
-        n++;
-    }
+    while (gcmGetFlipStatus() != 0 && n < 250) { usleep(200); n++; }
     gcmResetFlipStatus();
 }
 
@@ -404,12 +447,10 @@ static void fill_rect(int x, int y, int w, int h, u32 color)
     u32 *buf = target;
     for (int j = 0; j < h; j++) {
         int yy = y + j;
-        if (yy < 0 || yy >= (int)fb_height)
-            continue;
+        if (yy < 0 || yy >= (int)fb_height) continue;
         for (int i = 0; i < w; i++) {
             int xx = x + i;
-            if (xx < 0 || xx >= (int)fb_width)
-                continue;
+            if (xx < 0 || xx >= (int)fb_width) continue;
             buf[yy * fb_width + xx] = color;
         }
     }
@@ -420,12 +461,10 @@ static void shade_rect(int x, int y, int w, int h)
     u32 *buf = target;
     for (int j = 0; j < h; j++) {
         int yy = y + j;
-        if (yy < 0 || yy >= (int)fb_height)
-            continue;
+        if (yy < 0 || yy >= (int)fb_height) continue;
         for (int i = 0; i < w; i++) {
             int xx = x + i;
-            if (xx < 0 || xx >= (int)fb_width)
-                continue;
+            if (xx < 0 || xx >= (int)fb_width) continue;
             u32 p = buf[yy * fb_width + xx];
             u32 r = ((p >> 16) & 0xFF) * 3 / 4;
             u32 g = ((p >> 8) & 0xFF) * 3 / 4;
@@ -449,11 +488,9 @@ static void draw_sprite(int sx, int sy, const char *const *spr)
 {
     for (int j = 0; j < 16; j++) {
         const char *row = spr[j];
-        if (!row)
-            continue;
+        if (!row) continue;
         for (int i = 0; i < 16 && row[i]; i++) {
-            if (row[i] == '.')
-                continue;
+            if (row[i] == '.') continue;
             fill_rect(sx + i * S, sy + j * S, S, S, pal(row[i]));
         }
     }
@@ -461,12 +498,10 @@ static void draw_sprite(int sx, int sy, const char *const *spr)
 
 static char tile_at(int c, int r)
 {
-    if (c < 0 || r < 0 || c >= MAP_W || r >= MAP_H)
-        return '.';
+    if (c < 0 || r < 0 || c >= MAP_W || r >= MAP_H) return '.';
     const char *row = world[r];
     for (int i = 0; i < c; i++)
-        if (!row[i])
-            return '.';
+        if (!row[i]) return '.';
     return row[c] ? row[c] : '.';
 }
 
@@ -498,8 +533,7 @@ static void draw_soil(int sx, int sy, int wet)
 
 static void draw_farm_tile(int fc, int fr, int sx, int sy)
 {
-    if (fc < 0 || fc >= FARM_W || fr < 0 || fr >= FARM_H)
-        return;
+    if (fc < 0 || fc >= FARM_W || fr < 0 || fr >= FARM_H) return;
 
     int st = farm_state[fr][fc];
 
@@ -514,12 +548,9 @@ static void draw_farm_tile(int fc, int fr, int sx, int sy)
 
     draw_soil(sx, sy, farm_water[fr][fc]);
 
-    if (st == 2)
-        draw_sprite(sx, sy, spr_seed);
-    else if (st == 3)
-        draw_sprite(sx, sy, spr_sprout);
-    else if (st == 4)
-        draw_sprite(sx, sy, spr_grown);
+    if (st == 2) draw_sprite(sx, sy, spr_seed);
+    else if (st == 3) draw_sprite(sx, sy, spr_sprout);
+    else if (st == 4) draw_sprite(sx, sy, spr_grown);
 }
 
 static void draw_house(void)
@@ -531,14 +562,12 @@ static void draw_house(void)
     art_rect(235, 0, 10, 2, 'a');
 
     art_rect(188, 8, 72, 24, 'b');
-    for (int i = 0; i < 6; i++)
-        art_rect(188, 12 + i * 4, 72, 1, 'B');
+    for (int i = 0; i < 6; i++) art_rect(188, 12 + i * 4, 72, 1, 'B');
     art_rect(188, 6, 72, 3, 'B');
     art_rect(188, 32, 72, 2, 'B');
 
     art_rect(192, 34, 64, 28, 'c');
-    for (int i = 0; i < 5; i++)
-        art_rect(192, 40 + i * 6, 64, 1, 'C');
+    for (int i = 0; i < 5; i++) art_rect(192, 40 + i * 6, 64, 1, 'C');
     art_rect(192, 62, 64, 2, 'S');
     art_rect(192, 34, 2, 28, 'x');
     art_rect(254, 34, 2, 28, 'C');
@@ -563,8 +592,7 @@ static void draw_static_world(void)
     u32 *buf = target;
     u32 cor = pal('g');
     u32 n = fb_width * fb_height;
-    for (u32 i = 0; i < n; i++)
-        buf[i] = cor;
+    for (u32 i = 0; i < n; i++) buf[i] = cor;
 
     int cols = fb_width / TILE + 1;
     int rows = fb_height / TILE + 1;
@@ -582,14 +610,10 @@ static void draw_static_world(void)
                 break;
             case '.': {
                 unsigned h = tile_hash(c, r) % 100;
-                if (h < 8)
-                    draw_sprite(sx, sy, spr_tuftA);
-                else if (h < 16)
-                    draw_sprite(sx, sy, spr_tuftB);
-                else if (h < 20)
-                    draw_sprite(sx, sy, spr_flowerR);
-                else if (h < 24)
-                    draw_sprite(sx, sy, spr_flowerY);
+                if (h < 8) draw_sprite(sx, sy, spr_tuftA);
+                else if (h < 16) draw_sprite(sx, sy, spr_tuftB);
+                else if (h < 20) draw_sprite(sx, sy, spr_flowerR);
+                else if (h < 24) draw_sprite(sx, sy, spr_flowerY);
                 break;
             }
             case 'T':
@@ -599,6 +623,17 @@ static void draw_static_world(void)
             case 'R':
                 shade_rect(sx + 1 * S, sy + 11 * S, 15 * S, 4 * S);
                 draw_sprite(sx, sy, spr_rock);
+                break;
+            case 'O':
+                fill_rect(sx, sy, TILE, TILE, pal('d'));
+                draw_sprite(sx, sy, spr_well);
+                break;
+            case 'V':
+                shade_rect(sx + 1 * S, sy + 11 * S, 14 * S, 4 * S);
+                draw_sprite(sx, sy, spr_bush);
+                break;
+            case 'H':
+                /* casa é desenhada separado */
                 break;
             default:
                 break;
@@ -635,7 +670,6 @@ static void draw_canopies(void)
 {
     int cols = fb_width / TILE + 1;
     int rows = fb_height / TILE + 2;
-
     for (int r = 0; r < rows; r++)
         for (int c = 0; c < cols; c++)
             if (tile_at(c, r) == 'T')
@@ -698,26 +732,94 @@ static void draw_player(int dir, int anim)
     }
 }
 
+/* HUD reformulado, usa S */
 static void draw_hud(void)
 {
-    art_rect(1, 1, 66, 14, 'T');
-    art_rect(2, 2, 64, 12, 'c');
+    /* fundo */
+    art_rect(1, 1, 66, 16, 'T');
+    art_rect(2, 2, 64, 14, 'c');
 
-    int n = (colheita > 15) ? 15 : colheita;
+    /* linha 1: moedas */
+    art_rect(3, 3, 60, 1, 'S');
+
+    /* barra de moedas (cada bloco = 5 moedas, máx 15 blocos) */
+    int m = moedas / 5; if (m > 15) m = 15;
+    for (int i = 0; i < m; i++)
+        art_rect(3 + i * 4, 4, 3, 3, 'y');
+
+    /* colheita (frutas vermelhas) */
+    int n = colheita; if (n > 15) n = 15;
     for (int i = 0; i < n; i++)
-        art_rect(3 + i * 4, 3, 3, 3, 'r');
+        art_rect(3 + i * 4, 8, 3, 2, 'r');
 
-    art_rect(3, 7, 60, 2, 'S');
-    art_rect(3, 7, frames_dia * 60 / DAY_FRAMES, 2, 'o');
+    /* água do regador */
+    for (int i = 0; i < agua_regador && i < WATER_MAX; i++)
+        art_rect(3 + i * 3, 11, 2, 2, 'v');
 
-    int d = (dia > 15) ? 15 : dia;
+    /* barra de dia */
+    int dia_prog = frames_dia * 60 / DAY_FRAMES;
+    art_rect(3, 14, 60, 1, 'S');
+    art_rect(3, 14, dia_prog, 1, chovendo ? 'w' : 'o');
+
+    /* indicador de dia (blocos azuis) */
+    int d = dia; if (d > 15) d = 15;
     for (int i = 0; i < d; i++)
-        art_rect(3 + i * 4, 10, 3, 3, 'w');
+        art_rect(64 - i * 4, 3, 3, 2, 'w');
+}
+
+static void draw_flash(void)
+{
+    if (flash_timer > 0) {
+        int a = flash_timer * 12;
+        if (a > 200) a = 200;
+        /* flash branco translúcido: desenha faixas */
+        fill_rect(0, 0, fb_width, a, 0x00FFFFFF);
+        flash_timer--;
+    }
+}
+
+static void draw_popup(void)
+{
+    if (popup_timer > 0 && popup_texto[0]) {
+        int w = (int)strlen(popup_texto) * 6 * S;
+        int x = (fb_width - w) / 2;
+        int y = 30 * S;
+        fill_rect(x - 8, y - 6, w + 16, 14 * S / 2 + 6, pal('T'));
+        /* texto minúsculo em ASCII: cada letra 6*S de largura, 3*S de altura */
+        int cx = x;
+        for (int i = 0; popup_texto[i]; i++) {
+            int ci = popup_texto[i] - '0';
+            if (popup_texto[i] == '+') ci = 10;
+            if (popup_texto[i] == ' ') ci = 11;
+            if (ci < 0) ci = 11;
+            /* desenha como blocos simples */
+            for (int by = 0; by < 3; by++) {
+                for (int bx = 0; bx < 4; bx++) {
+                    int bit = (ci * 17 + by * 5 + bx * 3) & 1;
+                    if (bit)
+                        fill_rect(cx + bx * S, y + by * S, S, S, pal('x'));
+                }
+            }
+            cx += 6 * S;
+        }
+        popup_timer--;
+    }
+}
+
+static void draw_rain(void)
+{
+    if (!chovendo) return;
+    int t = chuva_timer;
+    for (int i = 0; i < 80; i++) {
+        int x = (i * 137 + t * 5) % (int)fb_width;
+        int y = (i * 89 + t * 11) % (int)fb_height;
+        fill_rect(x, y, S, S * 2, 0x00A0C0F0);
+    }
 }
 
 static int blocked_tile(char t)
 {
-    return t == 'T' || t == 'R' || t == 'H' || t == 'w';
+    return t == 'T' || t == 'R' || t == 'H' || t == 'w' || t == 'O' || t == 'V';
 }
 
 static int colide(int px, int py)
@@ -727,8 +829,7 @@ static int colide(int px, int py)
     int y0 = py + 16 * S;
     int y1 = py + 20 * S - 1;
 
-    if (x0 < 0 || y0 < 0)
-        return 0;
+    if (x0 < 0 || y0 < 0) return 0;
 
     return blocked_tile(tile_at(x0 / TILE, y0 / TILE)) ||
            blocked_tile(tile_at(x1 / TILE, y0 / TILE)) ||
@@ -736,32 +837,98 @@ static int colide(int px, int py)
            blocked_tile(tile_at(x1 / TILE, y1 / TILE));
 }
 
-static void acao_fazenda(int px, int py, int cross, int square)
+static int perto_da_casa(int px, int py)
+{
+    int c = (px + 6 * S) / TILE;
+    int r = (py + 18 * S) / TILE;
+    return tile_at(c, r) == 'H' || tile_at(c, r + 1) == 'H' ||
+           tile_at(c - 1, r) == 'H' || tile_at(c + 1, r) == 'H';
+}
+
+static int perto_do_poco(int px, int py)
+{
+    int c = (px + 6 * S) / TILE;
+    int r = (py + 18 * S) / TILE;
+    return tile_at(c, r) == 'O' || tile_at(c + 1, r) == 'O' ||
+           tile_at(c - 1, r) == 'O' || tile_at(c, r - 1) == 'O' ||
+           tile_at(c, r + 1) == 'O';
+}
+
+static int perto_do_lago(int px, int py)
+{
+    int c = (px + 6 * S) / TILE;
+    int r = (py + 18 * S) / TILE;
+    return tile_at(c, r) == 'w' || tile_at(c + 1, r) == 'w' ||
+           tile_at(c - 1, r) == 'w' || tile_at(c, r - 1) == 'w' ||
+           tile_at(c, r + 1) == 'w';
+}
+
+static void acao_fazenda(int px, int py, int cross, int square, int circle)
 {
     int col = (px + 6 * S) / TILE - FARM_C0;
     int row = (py + 18 * S) / TILE - FARM_R0;
 
-    if (col < 0 || col >= FARM_W || row < 0 || row >= FARM_H)
+    /* Encher regador no poço ou lago */
+    if (circle && (perto_do_poco(px, py) || perto_do_lago(px, py))) {
+        agua_regador = WATER_MAX;
+        flash_timer = 6;
         return;
+    }
+
+    if (col < 0 || col >= FARM_W || row < 0 || row >= FARM_H) return;
 
     unsigned char *st = &farm_state[row][col];
 
     if (cross) {
         if (*st == 0) {
             *st = 1;
+            flash_timer = 4;
         } else if (*st == 1) {
             *st = 2;
+            flash_timer = 4;
         } else if (*st == 4) {
             *st = 1;
             farm_water[row][col] = 0;
             colheita++;
+            flash_timer = 6;
         }
     }
 
     if (square) {
-        if (*st >= 1 && *st <= 3)
+        if (*st >= 1 && *st <= 3 && agua_regador > 0 && !farm_water[row][col]) {
             farm_water[row][col] = 1;
+            agua_regador--;
+            flash_timer = 4;
+        }
     }
+}
+
+static void vender_tudo(void)
+{
+    if (colheita <= 0) return;
+    int ganho = colheita * 10;
+    moedas += ganho;
+    colheita = 0;
+    flash_timer = 10;
+    snprintf(popup_texto, sizeof(popup_texto), "+%d", ganho);
+    popup_timer = 60;
+}
+
+static void dormir(void)
+{
+    if (!perto_da_casa(pl_x, pl_y)) return;
+    dia++;
+    frames_dia = 0;
+    for (int r = 0; r < FARM_H; r++) {
+        for (int c = 0; c < FARM_W; c++) {
+            if ((farm_state[r][c] == 2 || farm_state[r][c] == 3) && farm_water[r][c])
+                farm_state[r][c]++;
+            farm_water[r][c] = 0;
+        }
+    }
+    flash_timer = 12;
+    snprintf(popup_texto, sizeof(popup_texto), "+1");
+    popup_timer = 40;
 }
 
 static void passa_dia(void)
@@ -787,31 +954,32 @@ static void flip_screen(void)
 static void shutdown_video(void)
 {
     gcmSetWaitFlip(context);
-    for (int i = 0; i < 2; i++)
-        rsxFree(fb_addr[i]);
+    for (int i = 0; i < 2; i++) rsxFree(fb_addr[i]);
     rsxFinish(context, 1);
     free(host_addr);
-    if (cache)
-        free(cache);
+    if (cache) free(cache);
 }
 
 int main(int argc, char *argv[])
 {
+    (void)argc; (void)argv;
+
     padInfo padinfo;
     padData paddata;
     int px, py;
     int dir = 0;
     int anim_t = 0;
     int frame_count = 0;
-    int prev_cross = 0, prev_square = 0;
+    int prev_cross = 0, prev_square = 0, prev_circle = 0;
+    int prev_l1 = 0, prev_r1 = 0;
+    int prev_start = 0;
 
     sysUtilRegisterCallback(0, sysutil_cb, NULL);
     ioPadInit(7);
     init_video();
 
     S = fb_height / 180;
-    if (S < 2)
-        S = 2;
+    if (S < 2) S = 2;
 
     px = 6 * TILE;
     py = 4 * TILE;
@@ -824,10 +992,8 @@ int main(int argc, char *argv[])
 
     for (int i = 0; i < 2; i++) {
         target = fb_addr[i];
-        if (cache)
-            memcpy(fb_addr[i], cache, fb_width * fb_height * 4);
-        else
-            draw_static_world();
+        if (cache) memcpy(fb_addr[i], cache, fb_width * fb_height * 4);
+        else draw_static_world();
     }
 
     curr_fb = 0;
@@ -839,17 +1005,11 @@ int main(int argc, char *argv[])
 
     while (running) {
         sysUtilCheckCallback();
-
-        if (menu_aberto) {
-            usleep(20000);
-            continue;
-        }
-
-        if (redesenhar > 0)
-            redesenhar--;
+        if (menu_aberto) { usleep(20000); continue; }
 
         int mx = 0, my = 0;
-        int cross = 0, square = 0;
+        int cross = 0, square = 0, circle = 0;
+        int l1 = 0, r1 = 0, start = 0;
         int sp = S * 3 / 2;
 
         ioPadGetInfo(&padinfo);
@@ -857,23 +1017,34 @@ int main(int argc, char *argv[])
         if (padinfo.status[0]) {
             ioPadGetData(0, &paddata);
 
-            if (paddata.BTN_START)
-                running = 0;
-
             int c_now = paddata.BTN_CROSS;
             int s_now = paddata.BTN_SQUARE;
-            cross = c_now && !prev_cross;
+            int o_now = paddata.BTN_CIRCLE;
+            int l1_now = paddata.BTN_L1;
+            int r1_now = paddata.BTN_R1;
+            int st_now = paddata.BTN_START;
+
+            cross  = c_now && !prev_cross;
             square = s_now && !prev_square;
+            circle = o_now && !prev_circle;
+            l1     = l1_now && !prev_l1;
+            r1     = r1_now && !prev_r1;
+            start  = st_now && !prev_start;
+
             prev_cross = c_now;
             prev_square = s_now;
+            prev_circle = o_now;
+            prev_l1 = l1_now;
+            prev_r1 = r1_now;
+            prev_start = st_now;
+
+            if (start) running = 0;
 
             int dx = (int)paddata.ANA_L_H - 128;
             int dy = (int)paddata.ANA_L_V - 128;
 
-            if (dx > 30 || dx < -30)
-                mx += dx * S / 64;
-            if (dy > 30 || dy < -30)
-                my += dy * S / 64;
+            if (dx > 30 || dx < -30) mx += dx * S / 64;
+            if (dy > 30 || dy < -30) my += dy * S / 64;
 
             if (paddata.BTN_LEFT)  mx -= sp;
             if (paddata.BTN_RIGHT) mx += sp;
@@ -895,10 +1066,8 @@ int main(int argc, char *argv[])
         int seq = (anim_t / 6) & 3;
         int anim = (seq == 1) ? 1 : (seq == 3) ? 2 : 0;
 
-        if (!colide(px + mx, py))
-            px += mx;
-        if (!colide(px, py + my))
-            py += my;
+        if (!colide(px + mx, py)) px += mx;
+        if (!colide(px, py + my)) py += my;
 
         int pw = 12 * S;
         int ph = 20 * S;
@@ -907,9 +1076,28 @@ int main(int argc, char *argv[])
         if (px > (int)fb_width - pw)  px = fb_width - pw;
         if (py > (int)fb_height - ph) py = fb_height - ph;
 
-        acao_fazenda(px, py, cross, square);
+        acao_fazenda(px, py, cross, square, circle);
+
+        if (l1) vender_tudo();
+        if (r1) dormir();
 
         frames_dia++;
+
+        /* clima */
+        chuva_timer++;
+        if (!chovendo && chuva_timer > 1800) {
+            chovendo = 1;
+            chuva_timer = 0;
+            /* chuva molha todas as plantas */
+            for (int r = 0; r < FARM_H; r++)
+                for (int c = 0; c < FARM_W; c++)
+                    if (farm_state[r][c] >= 1 && farm_state[r][c] <= 3)
+                        farm_water[r][c] = 1;
+        } else if (chovendo && chuva_timer > 600) {
+            chovendo = 0;
+            chuva_timer = 0;
+        }
+
         if (frames_dia >= DAY_FRAMES) {
             frames_dia = 0;
             passa_dia();
@@ -920,17 +1108,24 @@ int main(int argc, char *argv[])
         wait_flip();
 
         target = fb_addr[curr_fb];
-        if (cache)
-            memcpy(target, cache, fb_width * fb_height * 4);
-        else
-            draw_static_world();
+        if (cache) memcpy(target, cache, fb_width * fb_height * 4);
+        else draw_static_world();
 
         draw_dynamic(frame_count);
         pl_x = px;
         pl_y = py;
         draw_player(dir, anim);
         draw_canopies();
+        draw_rain();
         draw_hud();
+        draw_popup();
+        draw_flash();
+
+        if (chovendo) {
+            /* escurece tela levemente */
+            fill_rect(0, 0, fb_width, 20, 0x00203040);
+        }
+
         flip_screen();
     }
 
