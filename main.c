@@ -17,14 +17,8 @@
 #define FARM_W     4
 #define FARM_H     3
 
-/* Tempo: 20 horas de jogo = 6:00 as 2:00
-   1 hora real = ~42s. Para simplificar: 10 min de jogo = ~7s reais.
-   A 60fps, 7s = 420 frames. Entao 10 min de jogo = 420 frames.
-   1 dia = 120 * 420 = 50400 frames. Mas isso e muito.
-   Vou usar uma escala mais rapida para o jogo nao ficar eterno:
-   10 min de jogo = 60 frames (1s real). 1 hora = 360 frames (6s).
-   1 dia (20h) = 7200 frames (2 min reais). Ajustavel. */
-
+/* Tempo: 10 min de jogo = 30 frames (1s real). 1 hora = 180 frames.
+   1 dia (20h) = 3600 frames = 60s reais (ajustavel) */
 #define FRAMES_PER_10MIN 30
 #define FRAMES_PER_HOUR  (6 * FRAMES_PER_10MIN)
 
@@ -63,11 +57,14 @@ static int can_level = 1;
 static int exausto = 0;
 
 /* Tempo */
-static int tempo_frames = 0;     /* frames desde 6:00 */
-static int hora_atual = 6;       /* 6 a 26 (26 = 2:00) */
+static int tempo_frames = 0;
+static int hora_atual = 6;
 static int minuto_atual = 0;
-static int escuro = 0;           /* 0 a 100, quanto escurecer */
+static int escuro = 0;
 static int desmaiou = 0;
+
+/* Hotbar (0=Enxada, 1=Regador, 2=Machado, 3=Picareta, 4=Foice, 5=Espada) */
+static int ferramenta_atual = 0;
 
 static const char *const world[MAP_H] = {
     "............HHHH....",
@@ -272,7 +269,6 @@ static void shade_rect(int x, int y, int w, int h)
     }
 }
 
-/* Escurece a tela inteira para simular noite */
 static void darken_screen(int amount)
 {
     if (amount <= 0) return;
@@ -478,16 +474,11 @@ static void draw_player(int dir, int anim)
 static void draw_digit(int dx, int dy, int num, u32 cor)
 {
     static const unsigned char font[10][5] = {
-        {0b111,0b101,0b101,0b101,0b111}, /* 0 */
-        {0b010,0b110,0b010,0b010,0b111}, /* 1 */
-        {0b111,0b001,0b111,0b100,0b111}, /* 2 */
-        {0b111,0b001,0b111,0b001,0b111}, /* 3 */
-        {0b101,0b101,0b111,0b001,0b001}, /* 4 */
-        {0b111,0b100,0b111,0b001,0b111}, /* 5 */
-        {0b111,0b100,0b111,0b101,0b111}, /* 6 */
-        {0b111,0b001,0b010,0b010,0b010}, /* 7 */
-        {0b111,0b101,0b111,0b101,0b111}, /* 8 */
-        {0b111,0b101,0b111,0b001,0b111}  /* 9 */
+        {0b111,0b101,0b101,0b101,0b111}, {0b010,0b110,0b010,0b010,0b111},
+        {0b111,0b001,0b111,0b100,0b111}, {0b111,0b001,0b111,0b001,0b111},
+        {0b101,0b101,0b111,0b001,0b001}, {0b111,0b100,0b111,0b001,0b111},
+        {0b111,0b100,0b111,0b101,0b111}, {0b111,0b001,0b010,0b010,0b010},
+        {0b111,0b101,0b111,0b101,0b111}, {0b111,0b101,0b111,0b001,0b111}
     };
     if (num < 0 || num > 9) return;
     for (int row = 0; row < 5; row++) {
@@ -498,69 +489,118 @@ static void draw_digit(int dx, int dy, int num, u32 cor)
     }
 }
 
-/* Relogio no canto superior direito: HH:MM */
-static void draw_clock(void)
+/* Relógio e Data no canto superior direito */
+static void draw_clock_and_date(void)
 {
     int h = hora_atual;
-    if (h >= 24) h -= 24; /* 24,25,26 -> 0,1,2 */
+    if (h >= 24) h -= 24;
     int m = (minuto_atual / 10) * 10;
 
-    int base_x = (int)fb_width - 40 * S;
+    int base_x = (int)fb_width - 44 * S;
     int base_y = 4 * S;
 
-    /* fundo */
-    fill_rect(base_x - 4 * S, base_y - 2 * S, 38 * S, 12 * S, pal('T'));
-    fill_rect(base_x - 2 * S, base_y, 34 * S, 8 * S, pal('c'));
+    /* Fundo do painel */
+    fill_rect(base_x - 4 * S, base_y - 2 * S, 42 * S, 22 * S, pal('T'));
+    fill_rect(base_x - 2 * S, base_y, 38 * S, 18 * S, pal('c'));
 
     u32 cor = pal('z');
 
-    /* hora (2 digitos) */
+    /* Data: Dia da semana e dia do mes (1-28) */
+    /* Simplificacao: Seg, Ter, Qua, Qui, Sex, Sab, Dom baseado no dia */
+    int dia_semana = (dia - 1) % 7; 
+    /* Desenha um quadradinho representando o dia da semana */
+    fill_rect(base_x, base_y + 2 * S, 6 * S, 3 * S, pal('S'));
+    /* Dia do mes (1 a 28) */
+    int d1 = (dia - 1) / 10 + 1;
+    int d2 = (dia - 1) % 10 + 1;
+    if (d1 > 0) draw_digit(base_x + 8 * S, base_y + 2 * S, d1, cor);
+    draw_digit(base_x + 12 * S, base_y + 2 * S, d2, cor);
+
+    /* Icone da estacao (bloco colorido) */
+    char est_cor = (estacao == 0) ? 'h' : (estacao == 1) ? 'y' : (estacao == 2) ? 'o' : 'x';
+    fill_rect(base_x + 18 * S, base_y + 2 * S, 4 * S, 3 * S, pal(est_cor));
+
+    /* Relogio (HH:MM) */
     int h1 = h / 10;
     int h2 = h % 10;
-    if (h1 > 0) draw_digit(base_x, base_y, h1, cor);
-    draw_digit(base_x + (h1 > 0 ? 4 : 0) * S, base_y, h2, cor);
+    if (h1 > 0) draw_digit(base_x, base_y + 8 * S, h1, cor);
+    draw_digit(base_x + (h1 > 0 ? 4 : 0) * S, base_y + 8 * S, h2, cor);
 
-    /* dois pontos */
     int colon_x = base_x + (h1 > 0 ? 8 : 4) * S;
-    fill_rect(colon_x, base_y + 1 * S, S, S, cor);
-    fill_rect(colon_x, base_y + 3 * S, S, S, cor);
+    fill_rect(colon_x, base_y + 9 * S, S, S, cor);
+    fill_rect(colon_x, base_y + 11 * S, S, S, cor);
 
-    /* minutos (2 digitos) */
     int m1 = m / 10;
     int m2 = m % 10;
-    draw_digit(colon_x + 2 * S, base_y, m1, cor);
-    draw_digit(colon_x + 6 * S, base_y, m2, cor);
+    draw_digit(colon_x + 2 * S, base_y + 8 * S, m1, cor);
+    draw_digit(colon_x + 6 * S, base_y + 8 * S, m2, cor);
 }
 
-/* HUD esquerda: energia, agua, dia, estacao */
-static void draw_hud(void)
+/* HUD Esquerdo: Moedas e Colheita */
+static void draw_hud_left(void)
 {
-    art_rect(1, 1, 50, 20, 'T');
-    art_rect(2, 2, 48, 18, 'c');
+    art_rect(1, 1, 40, 10, 'T');
+    art_rect(2, 2, 38, 8, 'c');
 
-    /* Energia */
-    int e = energia * 44 / ENERGY_MAX;
-    art_rect(3, 10, 44, 2, 'S');
-    art_rect(3, 10, e, 2, (energia < 20) ? 'i' : 'h');
+    int m = moedas / 5; if (m > 6) m = 6;
+    for (int i = 0; i < m; i++) art_rect(3 + i * 5, 3, 4, 2, 'y');
 
-    /* Agua */
-    int w = agua_regador * 44 / WATER_MAX;
-    art_rect(3, 13, 44, 1, 'S');
-    art_rect(3, 13, w, 1, 'v');
+    int n = colheita; if (n > 6) n = 6;
+    for (int i = 0; i < n; i++) art_rect(3 + i * 5, 6, 3, 2, 'r');
+}
 
-    /* Moedas */
-    int m = moedas / 5; if (m > 8) m = 8;
-    for (int i = 0; i < m; i++) art_rect(3 + i * 5, 3, 4, 3, 'y');
+/* Barra de Energia Vertical no canto inferior direito */
+static void draw_energy_bar(void)
+{
+    int bar_w = 4 * S;
+    int bar_h = 60 * S;
+    int base_x = (int)fb_width - bar_w - 4 * S;
+    int base_y = (int)fb_height - bar_h - 20 * S;
 
-    /* Colheita */
-    int n = colheita; if (n > 8) n = 8;
-    for (int i = 0; i < n; i++) art_rect(3 + i * 5, 7, 3, 2, 'r');
+    /* Fundo da barra */
+    fill_rect(base_x - S, base_y - S, bar_w + 2 * S, bar_h + 2 * S, pal('T'));
+    fill_rect(base_x, base_y, bar_w, bar_h, pal('S'));
 
-    /* Estacao (4 blocos) */
-    char est = (estacao == 0) ? 'h' : (estacao == 1) ? 'y' : (estacao == 2) ? 'o' : 'x';
-    for (int i = 0; i < 4; i++) {
-        if (i == estacao) art_rect(44 + i * 2, 3, 1, 1, est);
-        else art_rect(44 + i * 2, 3, 1, 1, 'S');
+    /* Preenchimento Verde */
+    int e = energia * bar_h / ENERGY_MAX;
+    if (energia < 0) e = 0;
+    fill_rect(base_x, base_y + (bar_h - e), bar_w, e, 0x0050D050); /* Verde vibrante */
+}
+
+/* Hotbar de Ferramentas no canto inferior */
+static void draw_hotbar(void)
+{
+    int num_slots = 6;
+    int slot_size = 6 * S;
+    int gap = S;
+    int total_w = num_slots * slot_size + (num_slots - 1) * gap;
+    int base_x = ((int)fb_width - total_w) / 2;
+    int base_y = (int)fb_height - slot_size - 4 * S;
+
+    /* Fundo da Hotbar */
+    fill_rect(base_x - 2 * S, base_y - 2 * S, total_w + 4 * S, slot_size + 4 * S, pal('T'));
+
+    for (int i = 0; i < num_slots; i++) {
+        int sx = base_x + i * (slot_size + gap);
+        int sy = base_y;
+
+        /* Fundo do Slot */
+        fill_rect(sx, sy, slot_size, slot_size, pal('c'));
+
+        /* Borda (destacada se for a atual) */
+        u32 borda_cor = (i == ferramenta_atual) ? 0x00FFFFFF : pal('S');
+        fill_rect(sx, sy, slot_size, S, borda_cor);
+        fill_rect(sx, sy + slot_size - S, slot_size, S, borda_cor);
+        fill_rect(sx, sy, S, slot_size, borda_cor);
+        fill_rect(sx + slot_size - S, sy, S, slot_size, borda_cor);
+
+        /* Icone simplificado da ferramenta */
+        if (i == 0) fill_rect(sx + 2 * S, sy + 2 * S, 2 * S, 2 * S, pal('s')); /* Enxada */
+        else if (i == 1) fill_rect(sx + 2 * S, sy + 2 * S, 2 * S, 2 * S, pal('v')); /* Regador */
+        else if (i == 2) fill_rect(sx + 2 * S, sy + 2 * S, 2 * S, 2 * S, pal('r')); /* Machado */
+        else if (i == 3) fill_rect(sx + 2 * S, sy + 2 * S, 2 * S, 2 * S, pal('a')); /* Picareta */
+        else if (i == 4) fill_rect(sx + 2 * S, sy + 2 * S, 2 * S, 2 * S, pal('y')); /* Foice */
+        else if (i == 5) fill_rect(sx + 2 * S, sy + 2 * S, 2 * S, 2 * S, pal('I')); /* Espada */
     }
 }
 
@@ -624,12 +664,13 @@ static int perto_do_lago(int px, int py)
            tile_at(c, r + 1) == 'w';
 }
 
-static void acao_fazenda(int px, int py, int cross, int square, int circle)
+/* Acao baseada na ferramenta selecionada */
+static void acao_ferramenta(int px, int py, int cross, int square, int circle)
 {
     int col = (px + 6 * S) / TILE - FARM_C0;
     int row = (py + 18 * S) / TILE - FARM_R0;
 
-    if (circle && (perto_do_poco(px, py) || perto_do_lago(px, py))) {
+    if (ferramenta_atual == 1 && circle && (perto_do_poco(px, py) || perto_do_lago(px, py))) {
         agua_regador = WATER_MAX;
         flash_timer = 6;
         return;
@@ -638,34 +679,22 @@ static void acao_fazenda(int px, int py, int cross, int square, int circle)
     if (col < 0 || col >= FARM_W || row < 0 || row >= FARM_H) return;
     unsigned char *st = &farm_state[row][col];
 
-    if (cross) {
+    /* Enxada (0): Ara e Planta */
+    if (ferramenta_atual == 0 && cross) {
         if (*st == 0 && energia >= 2) { *st = 1; energia -= 2; flash_timer = 4; }
         else if (*st == 1 && energia >= 2) { *st = 2; energia -= 2; flash_timer = 4; }
         else if (*st == 4) { *st = 1; farm_water[row][col] = 0; colheita++; flash_timer = 6; }
     }
-
-    if (square && agua_regador > 0 && !farm_water[row][col] && energia >= 1) {
-        if (*st >= 1 && *st <= 3) {
-            int dx = 0, dy = 0;
-            if (can_level == 1) { dx = 0; dy = 0; }
-            else if (can_level == 2) { dx = 1; dy = 0; }
-            else if (can_level == 3) { dx = 1; dy = 1; }
-            for (int rr = row - (can_level == 3 ? 1 : 0); rr <= row + (can_level == 3 ? 1 : 0); rr++) {
-                for (int cc = col - (can_level == 3 ? 1 : 0); cc <= col + dx; cc++) {
-                    if (rr >= 0 && rr < FARM_H && cc >= 0 && cc < FARM_W) {
-                        if (farm_state[rr][cc] >= 1 && farm_state[rr][cc] <= 3 && !farm_water[rr][cc]) {
-                            farm_water[rr][cc] = 1;
-                            agua_regador--;
-                            energia -= 1;
-                            if (agua_regador <= 0) break;
-                        }
-                    }
-                }
-                if (agua_regador <= 0) break;
-            }
+    /* Regador (1): Regar */
+    else if (ferramenta_atual == 1 && square && agua_regador > 0 && energia >= 1) {
+        if (*st >= 1 && *st <= 3 && !farm_water[row][col]) {
+            farm_water[row][col] = 1;
+            agua_regador--;
+            energia -= 1;
             flash_timer = 4;
         }
     }
+    /* Outras ferramentas (Machado, Picareta, Foice, Espada) nao fazem nada na fazenda por enquanto */
 }
 
 static void vender_tudo(void)
@@ -677,22 +706,17 @@ static void vender_tudo(void)
     flash_timer = 10;
 }
 
-/* Atualiza hora/minuto e escurecimento */
 static void atualiza_tempo(void)
 {
     tempo_frames++;
-
-    /* 6:00 = frame 0. Cada FRAMES_PER_10MIN avanca 10 min */
     int total_min = (tempo_frames / FRAMES_PER_10MIN) * 10;
     int h = 6 + total_min / 60;
     int m = total_min % 60;
 
     if (h >= 26) {
-        /* 2:00 - desmaio */
         h = 26; m = 0;
         if (!desmaiou) {
             desmaiou = 1;
-            /* perde 10% das moedas, max 1000 */
             int perda = moedas / 10;
             if (perda > 1000) perda = 1000;
             moedas -= perda;
@@ -700,16 +724,13 @@ static void atualiza_tempo(void)
             flash_timer = 30;
         }
     }
-
     hora_atual = h;
     minuto_atual = m;
 
-    /* Escurecimento baseado na estacao */
-    /* Primavera/Verao: escurece as 20:00. Outono: 19:00. Inverno: 18:00 */
     int hora_escurecer = (estacao == 0 || estacao == 1) ? 20 : (estacao == 2) ? 19 : 18;
     if (h >= hora_escurecer) {
         int horas_escuras = h - hora_escurecer;
-        escuro = horas_escuras * 15; /* cada hora escurece 15% */
+        escuro = horas_escuras * 15;
         if (escuro > 75) escuro = 75;
     } else {
         escuro = 0;
@@ -720,27 +741,22 @@ static void dormir(void)
 {
     if (!perto_da_casa(pl_x, pl_y)) return;
 
-    /* Calcula energia recuperada baseada na hora */
-    /* Antes da meia-noite: 100%. Depois: proporcional */
     int h = hora_atual;
     if (h >= 26) h = 26;
     if (h <= 24) {
         energia = ENERGY_MAX;
     } else {
-        /* 24:00 a 26:00 -> 100% a 50% */
-        int frac = (h - 24) * 50 / 2; /* 0 a 50 */
+        int frac = (h - 24) * 50 / 2;
         energia = ENERGY_MAX * (100 - frac) / 100;
     }
     exausto = 0;
     desmaiou = 0;
 
-    /* Avanca dia */
     dia++;
     tempo_frames = 0;
     hora_atual = 6;
     minuto_atual = 0;
 
-    /* Fazenda cresce */
     for (int r = 0; r < FARM_H; r++)
         for (int c = 0; c < FARM_W; c++) {
             if ((farm_state[r][c] == 2 || farm_state[r][c] == 3) && farm_water[r][c])
@@ -748,8 +764,7 @@ static void dormir(void)
             farm_water[r][c] = 0;
         }
 
-    /* Muda estacao a cada 5 dias */
-    if (dia % 5 == 0) {
+    if (dia % 28 == 0) { /* Estacoes duram 28 dias */
         estacao = (estacao + 1) % 4;
         if (cache) { target = cache; draw_static_world(); }
     }
@@ -779,7 +794,7 @@ int main(int argc, char *argv[])
     padInfo padinfo; padData paddata;
     int px, py; int dir = 0; int anim_t = 0; int frame_count = 0;
     int prev_cross = 0, prev_square = 0, prev_circle = 0;
-    int prev_l1 = 0, prev_r1 = 0, prev_start = 0, prev_r2 = 0;
+    int prev_l1 = 0, prev_r1 = 0, prev_start = 0, prev_l2 = 0, prev_r2 = 0;
 
     sysUtilRegisterCallback(0, sysutil_cb, NULL);
     ioPadInit(7);
@@ -809,7 +824,7 @@ int main(int argc, char *argv[])
 
         int mx = 0, my = 0;
         int cross = 0, square = 0, circle = 0;
-        int l1 = 0, r1 = 0, start = 0, r2 = 0;
+        int l1 = 0, r1 = 0, start = 0, l2 = 0, r2 = 0;
         int sp = S * 3 / 2;
 
         ioPadGetInfo(&padinfo);
@@ -818,13 +833,14 @@ int main(int argc, char *argv[])
             int c_now = paddata.BTN_CROSS, s_now = paddata.BTN_SQUARE;
             int o_now = paddata.BTN_CIRCLE, l1_now = paddata.BTN_L1;
             int r1_now = paddata.BTN_R1, st_now = paddata.BTN_START;
-            int r2_now = paddata.BTN_R2;
+            int l2_now = paddata.BTN_L2, r2_now = paddata.BTN_R2;
             cross = c_now && !prev_cross; square = s_now && !prev_square;
             circle = o_now && !prev_circle; l1 = l1_now && !prev_l1;
             r1 = r1_now && !prev_r1; start = st_now && !prev_start;
-            r2 = r2_now && !prev_r2;
+            l2 = l2_now && !prev_l2; r2 = r2_now && !prev_r2;
             prev_cross = c_now; prev_square = s_now; prev_circle = o_now;
-            prev_l1 = l1_now; prev_r1 = r1_now; prev_start = st_now; prev_r2 = r2_now;
+            prev_l1 = l1_now; prev_r1 = r1_now; prev_start = st_now;
+            prev_l2 = l2_now; prev_r2 = r2_now;
             if (start) running = 0;
 
             int dx = (int)paddata.ANA_L_H - 128;
@@ -834,6 +850,10 @@ int main(int argc, char *argv[])
             if (paddata.BTN_LEFT) mx -= sp; if (paddata.BTN_RIGHT) mx += sp;
             if (paddata.BTN_UP) my -= sp; if (paddata.BTN_DOWN) my += sp;
         }
+
+        /* Navegacao na Hotbar com L2 e R2 */
+        if (l2) { ferramenta_atual = (ferramenta_atual + 5) % 6; flash_timer = 2; }
+        if (r2) { ferramenta_atual = (ferramenta_atual + 1) % 6; flash_timer = 2; }
 
         int moving = (mx != 0 || my != 0);
         if (moving) {
@@ -854,23 +874,11 @@ int main(int argc, char *argv[])
         if (px > (int)fb_width - pw) px = fb_width - pw;
         if (py > (int)fb_height - ph) py = fb_height - ph;
 
-        if (r2 && perto_da_casa(px, py)) {
-            if (moedas >= 100) {
-                moedas -= 100;
-                if (hoe_level < 3) hoe_level++;
-                else if (can_level < 3) can_level++;
-                flash_timer = 8;
-            }
-        }
-
-        acao_fazenda(px, py, cross, square, circle);
+        acao_ferramenta(px, py, cross, square, circle);
         if (l1) vender_tudo();
         if (r1) dormir();
 
-        /* Avanca tempo */
         if (!desmaiou) atualiza_tempo();
-
-        /* Se desmaiou, forca dormir */
         if (desmaiou) {
             dormir();
             px = 6 * TILE; py = 4 * TILE;
@@ -902,11 +910,12 @@ int main(int argc, char *argv[])
         draw_canopies();
         draw_rain();
 
-        /* Escurece conforme hora */
         if (escuro > 0) darken_screen(escuro);
 
-        draw_hud();
-        draw_clock();
+        draw_hud_left();
+        draw_clock_and_date();
+        draw_energy_bar();
+        draw_hotbar();
         draw_flash();
         flip_screen();
     }
