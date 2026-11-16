@@ -30,6 +30,8 @@ static u32 curr_fb = 0;
 static u32 fb_offset[2];
 static u32 *fb_addr[2];
 static u32 fb_pitch, fb_width, fb_height;
+static u32 *cache = NULL;
+static u32 *target = NULL;
 
 static unsigned char farm_state[FARM_H][FARM_W];
 static unsigned char farm_water[FARM_H][FARM_W];
@@ -339,6 +341,7 @@ static u32 pal(char ch)
     case 'I': return 0x00A02020;
     case 'j': return 0x003A4A9A;
     case 'Q': return 0x002F7A28;
+    case 'P': return 0x00387A2E;
     default:  return 0x00FF00FF;
     }
 }
@@ -398,7 +401,7 @@ static void init_video(void)
 
 static void fill_rect(int x, int y, int w, int h, u32 color)
 {
-    u32 *buf = fb_addr[curr_fb];
+    u32 *buf = target;
     for (int j = 0; j < h; j++) {
         int yy = y + j;
         if (yy < 0 || yy >= (int)fb_height)
@@ -408,6 +411,26 @@ static void fill_rect(int x, int y, int w, int h, u32 color)
             if (xx < 0 || xx >= (int)fb_width)
                 continue;
             buf[yy * fb_width + xx] = color;
+        }
+    }
+}
+
+static void shade_rect(int x, int y, int w, int h)
+{
+    u32 *buf = target;
+    for (int j = 0; j < h; j++) {
+        int yy = y + j;
+        if (yy < 0 || yy >= (int)fb_height)
+            continue;
+        for (int i = 0; i < w; i++) {
+            int xx = x + i;
+            if (xx < 0 || xx >= (int)fb_width)
+                continue;
+            u32 p = buf[yy * fb_width + xx];
+            u32 r = ((p >> 16) & 0xFF) * 3 / 4;
+            u32 g = ((p >> 8) & 0xFF) * 3 / 4;
+            u32 b = (p & 0xFF) * 3 / 4;
+            buf[yy * fb_width + xx] = (r << 16) | (g << 8) | b;
         }
     }
 }
@@ -434,15 +457,6 @@ static void draw_sprite(int sx, int sy, const char *const *spr)
             fill_rect(sx + i * S, sy + j * S, S, S, pal(row[i]));
         }
     }
-}
-
-static void draw_base(void)
-{
-    u32 *buf = fb_addr[curr_fb];
-    u32 cor = pal('g');
-    u32 n = fb_width * fb_height;
-    for (u32 i = 0; i < n; i++)
-        buf[i] = cor;
 }
 
 static char tile_at(int c, int r)
@@ -508,68 +522,11 @@ static void draw_farm_tile(int fc, int fr, int sx, int sy)
         draw_sprite(sx, sy, spr_grown);
 }
 
-static void draw_ground(int frame)
-{
-    int cols = fb_width / TILE + 1;
-    int rows = fb_height / TILE + 1;
-    int wf = (frame / 30) & 1;
-
-    for (int r = 0; r < rows; r++) {
-        for (int c = 0; c < cols; c++) {
-            char t = tile_at(c, r);
-            int sx = c * TILE;
-            int sy = r * TILE;
-
-            switch (t) {
-            case 'p':
-                fill_rect(sx, sy, TILE, TILE, pal('d'));
-                draw_sprite(sx, sy, spr_dirt);
-                break;
-            case 'w':
-                fill_rect(sx, sy, TILE, TILE, pal('w'));
-                draw_sprite(sx, sy, wf ? spr_waterB : spr_waterA);
-                break;
-            case 'F':
-                draw_farm_tile(c - FARM_C0, r - FARM_R0, sx, sy);
-                break;
-            case '.': {
-                unsigned h = tile_hash(c, r) % 100;
-                if (h < 8)
-                    draw_sprite(sx, sy, spr_tuftA);
-                else if (h < 16)
-                    draw_sprite(sx, sy, spr_tuftB);
-                else if (h < 20)
-                    draw_sprite(sx, sy, spr_flowerR);
-                else if (h < 24)
-                    draw_sprite(sx, sy, spr_flowerY);
-                break;
-            }
-            case 'T':
-                draw_sprite(sx, sy, spr_trunk);
-                break;
-            case 'R':
-                draw_sprite(sx, sy, spr_rock);
-                break;
-            default:
-                break;
-            }
-        }
-    }
-}
-
-static void draw_canopies(void)
-{
-    int cols = fb_width / TILE + 1;
-    int rows = fb_height / TILE + 2;
-
-    for (int r = 0; r < rows; r++)
-        for (int c = 0; c < cols; c++)
-            if (tile_at(c, r) == 'T')
-                draw_sprite(c * TILE, (r - 1) * TILE, spr_canopy);
-}
-
 static void draw_house(void)
 {
+    shade_rect(190 * S, 64 * S, 80 * S, 4 * S);
+    shade_rect(260 * S, 34 * S, 4 * S, 30 * S);
+
     art_rect(236, 0, 8, 14, 'S');
     art_rect(235, 0, 10, 2, 'a');
 
@@ -583,6 +540,8 @@ static void draw_house(void)
     for (int i = 0; i < 5; i++)
         art_rect(192, 40 + i * 6, 64, 1, 'C');
     art_rect(192, 62, 64, 2, 'S');
+    art_rect(192, 34, 2, 28, 'x');
+    art_rect(254, 34, 2, 28, 'C');
 
     art_rect(210, 44, 12, 18, 'T');
     art_rect(211, 45, 10, 17, 't');
@@ -599,13 +558,97 @@ static void draw_house(void)
     art_rect(238, 46, 8, 1, 'T');
 }
 
+static void draw_static_world(void)
+{
+    u32 *buf = target;
+    u32 cor = pal('g');
+    u32 n = fb_width * fb_height;
+    for (u32 i = 0; i < n; i++)
+        buf[i] = cor;
+
+    int cols = fb_width / TILE + 1;
+    int rows = fb_height / TILE + 1;
+
+    for (int r = 0; r < rows; r++) {
+        for (int c = 0; c < cols; c++) {
+            char t = tile_at(c, r);
+            int sx = c * TILE;
+            int sy = r * TILE;
+
+            switch (t) {
+            case 'p':
+                fill_rect(sx, sy, TILE, TILE, pal('d'));
+                draw_sprite(sx, sy, spr_dirt);
+                break;
+            case '.': {
+                unsigned h = tile_hash(c, r) % 100;
+                if (h < 8)
+                    draw_sprite(sx, sy, spr_tuftA);
+                else if (h < 16)
+                    draw_sprite(sx, sy, spr_tuftB);
+                else if (h < 20)
+                    draw_sprite(sx, sy, spr_flowerR);
+                else if (h < 24)
+                    draw_sprite(sx, sy, spr_flowerY);
+                break;
+            }
+            case 'T':
+                shade_rect(sx + 1 * S, sy + 8 * S, 14 * S, 6 * S);
+                draw_sprite(sx, sy, spr_trunk);
+                break;
+            case 'R':
+                shade_rect(sx + 1 * S, sy + 11 * S, 15 * S, 4 * S);
+                draw_sprite(sx, sy, spr_rock);
+                break;
+            default:
+                break;
+            }
+        }
+    }
+
+    draw_house();
+}
+
+static void draw_dynamic(int frame)
+{
+    int cols = fb_width / TILE + 1;
+    int rows = fb_height / TILE + 1;
+    int wf = (frame / 30) & 1;
+
+    for (int r = 0; r < rows; r++) {
+        for (int c = 0; c < cols; c++) {
+            char t = tile_at(c, r);
+            int sx = c * TILE;
+            int sy = r * TILE;
+
+            if (t == 'w') {
+                fill_rect(sx, sy, TILE, TILE, pal('w'));
+                draw_sprite(sx, sy, wf ? spr_waterB : spr_waterA);
+            } else if (t == 'F') {
+                draw_farm_tile(c - FARM_C0, r - FARM_R0, sx, sy);
+            }
+        }
+    }
+}
+
+static void draw_canopies(void)
+{
+    int cols = fb_width / TILE + 1;
+    int rows = fb_height / TILE + 2;
+
+    for (int r = 0; r < rows; r++)
+        for (int c = 0; c < cols; c++)
+            if (tile_at(c, r) == 'T')
+                draw_sprite(c * TILE, (r - 1) * TILE, spr_canopy);
+}
+
 static void draw_player(int dir, int anim)
 {
     int la = 5, lb = 5;
     if (anim == 1) la = 4;
     if (anim == 2) lb = 4;
 
-    prect(1, 18, 10, 2, 'Q');
+    shade_rect(pl_x + 1 * S, pl_y + 18 * S, 10 * S, 2 * S);
 
     if (dir == 0 || dir == 1) {
         prect(0, 9, 2, 5, 'I');
@@ -748,6 +791,8 @@ static void shutdown_video(void)
         rsxFree(fb_addr[i]);
     rsxFinish(context, 1);
     free(host_addr);
+    if (cache)
+        free(cache);
 }
 
 int main(int argc, char *argv[])
@@ -771,10 +816,21 @@ int main(int argc, char *argv[])
     px = 6 * TILE;
     py = 4 * TILE;
 
+    cache = (u32 *)memalign(128, fb_width * fb_height * 4);
+    if (cache) {
+        target = cache;
+        draw_static_world();
+    }
+
+    for (int i = 0; i < 2; i++) {
+        target = fb_addr[i];
+        if (cache)
+            memcpy(fb_addr[i], cache, fb_width * fb_height * 4);
+        else
+            draw_static_world();
+    }
+
     curr_fb = 0;
-    draw_base();
-    curr_fb = 1;
-    draw_base();
     gcmResetFlipStatus();
     gcmSetFlip(context, 1);
     rsxFlushBuffer(context);
@@ -863,9 +919,13 @@ int main(int argc, char *argv[])
 
         wait_flip();
 
-        draw_base();
-        draw_ground(frame_count);
-        draw_house();
+        target = fb_addr[curr_fb];
+        if (cache)
+            memcpy(target, cache, fb_width * fb_height * 4);
+        else
+            draw_static_world();
+
+        draw_dynamic(frame_count);
         pl_x = px;
         pl_y = py;
         draw_player(dir, anim);
