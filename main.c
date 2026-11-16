@@ -11,7 +11,8 @@
 #define CB_SIZE   (1024 * 1024)
 #define HOST_SIZE (32 * 1024 * 1024)
 #define TILE      64
-#define MARGEM    24
+#define PLAYER_W  48
+#define PLAYER_H  64
 
 static gcmContextData *context = NULL;
 static void *host_addr = NULL;
@@ -66,9 +67,9 @@ static void init_video(void)
     }
 }
 
-static void fill_rect_fb(int fb, int x, int y, int w, int h, u32 color)
+static void fill_rect(int x, int y, int w, int h, u32 color)
 {
-    u32 *buf = fb_addr[fb];
+    u32 *buf = fb_addr[curr_fb];
     for (int j = 0; j < h; j++) {
         int yy = y + j;
         if (yy < 0 || yy >= (int)fb_height)
@@ -82,50 +83,24 @@ static void fill_rect_fb(int fb, int x, int y, int w, int h, u32 color)
     }
 }
 
-static void fill_rect(int x, int y, int w, int h, u32 color)
+static void draw_map(void)
 {
-    fill_rect_fb(curr_fb, x, y, w, h, color);
-}
+    u32 *buf = fb_addr[curr_fb];
+    u32 verde1 = 0x0045A83A;
+    u32 verde2 = 0x003E9C34;
 
-static u32 cor_do_tile(int c, int r)
-{
-    return ((r + c) % 2 == 0) ? 0x0045A83A : 0x003E9C34;
-}
+    for (u32 y = 0; y < fb_height; y++) {
+        int r = y / TILE;
+        u32 *linha = buf + y * fb_width;
+        for (u32 x = 0; x < fb_width; x++) {
+            int c = x / TILE;
+            linha[x] = (((r + c) & 1) == 0) ? verde1 : verde2;
+        }
+    }
 
-static void draw_scenery(int fb)
-{
-    fill_rect_fb(fb, 5 * TILE + 24, 3 * TILE + 32, 16, 40, 0x00654321);
-    fill_rect_fb(fb, 5 * TILE, 3 * TILE - 20, 64, 56, 0x00206020);
-    fill_rect_fb(fb, 10 * TILE, 6 * TILE, 48, 32, 0x00888888);
-}
-
-static void draw_full_map(int fb)
-{
-    int cols = fb_width / TILE + 1;
-    int rows = fb_height / TILE + 1;
-
-    for (int r = 0; r < rows; r++)
-        for (int c = 0; c < cols; c++)
-            fill_rect_fb(fb, c * TILE, r * TILE, TILE, TILE, cor_do_tile(c, r));
-
-    draw_scenery(fb);
-}
-
-static void repaint_area(int fb, int ax, int ay, int aw, int ah)
-{
-    int c0 = ax / TILE;
-    int r0 = ay / TILE;
-    int c1 = (ax + aw) / TILE;
-    int r1 = (ay + ah) / TILE;
-
-    if (ax < 0) c0 = 0;
-    if (ay < 0) r0 = 0;
-
-    for (int r = r0; r <= r1; r++)
-        for (int c = c0; c <= c1; c++)
-            fill_rect_fb(fb, c * TILE, r * TILE, TILE, TILE, cor_do_tile(c, r));
-
-    draw_scenery(fb);
+    fill_rect(5 * TILE + 24, 3 * TILE + 32, 16, 40, 0x00654321);
+    fill_rect(5 * TILE, 3 * TILE - 20, 64, 56, 0x00206020);
+    fill_rect(10 * TILE, 6 * TILE, 48, 32, 0x00888888);
 }
 
 static void draw_player(int px, int py)
@@ -158,15 +133,10 @@ int main(int argc, char *argv[])
     padInfo padinfo;
     padData paddata;
     int px = 300, py = 300;
-    int old_px[2] = { 300, 300 };
-    int old_py[2] = { 300, 300 };
 
     sysUtilRegisterCallback(0, sysutil_cb, NULL);
     ioPadInit(7);
     init_video();
-
-    draw_full_map(0);
-    draw_full_map(1);
 
     while (running) {
         sysUtilCheckCallback();
@@ -176,15 +146,8 @@ int main(int argc, char *argv[])
             continue;
         }
 
-        if (redesenhar > 0) {
-            draw_full_map(curr_fb);
-            draw_player(px, py);
-            old_px[curr_fb] = px;
-            old_py[curr_fb] = py;
-            flip_screen();
+        if (redesenhar > 0)
             redesenhar--;
-            continue;
-        }
 
         ioPadGetInfo(&padinfo);
 
@@ -197,9 +160,9 @@ int main(int argc, char *argv[])
             int dx = (int)paddata.ANA_L_H - 128;
             int dy = (int)paddata.ANA_L_V - 128;
 
-            if (dx > 20 || dx < -20)
+            if (dx > 30 || dx < -30)
                 px += dx / 16;
-            if (dy > 20 || dy < -20)
+            if (dy > 30 || dy < -30)
                 py += dy / 16;
 
             if (paddata.BTN_LEFT)  px -= 6;
@@ -208,13 +171,13 @@ int main(int argc, char *argv[])
             if (paddata.BTN_DOWN)  py += 6;
         }
 
-        repaint_area(curr_fb,
-                     old_px[curr_fb] - MARGEM, old_py[curr_fb] - MARGEM,
-                     48 + 2 * MARGEM, 64 + 2 * MARGEM);
-        draw_player(px, py);
-        old_px[curr_fb] = px;
-        old_py[curr_fb] = py;
+        if (px < 0) px = 0;
+        if (py < 0) py = 0;
+        if (px > (int)fb_width - PLAYER_W)  px = fb_width - PLAYER_W;
+        if (py > (int)fb_height - PLAYER_H) py = fb_height - PLAYER_H;
 
+        draw_map();
+        draw_player(px, py);
         flip_screen();
     }
 
