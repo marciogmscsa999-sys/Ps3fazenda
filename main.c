@@ -73,9 +73,11 @@ static int flash_c = -1, flash_r = -1, flash_frames = 0;
 
 typedef struct { int x, y, dir, wp, timer; } NPC;
 static NPC npcs[NPC_COUNT];
+
+/* CORREÇÃO AQUI: Usando coordenadas de tile em vez de TILE * x */
 static const int npc_paths[NPC_COUNT][4][2] = {
-    {{8*TILE, 6*TILE}, {12*TILE, 6*TILE}, {12*TILE, 8*TILE}, {8*TILE, 8*TILE}},
-    {{15*TILE, 4*TILE}, {18*TILE, 4*TILE}, {18*TILE, 7*TILE}, {15*TILE, 7*TILE}}
+    {{8, 6}, {12, 6}, {12, 8}, {8, 8}},
+    {{15, 4}, {18, 4}, {18, 7}, {15, 7}}
 };
 static const char npc_shirt[NPC_COUNT] = { 'q', 'F' };
 
@@ -962,7 +964,6 @@ static int colide(int px, int py)
 
 static int player_near_box(void)
 {
-    // caixa em frente à casa: coluna FARM_C0+7, linha ~4 (tile p)
     int bx = (FARM_C0 + 7) * TILE;
     int by = (FARM_R0 + 3) * TILE;
     int dx = pl_x - bx;
@@ -1123,8 +1124,9 @@ static void update_camera(void)
 static void update_npcs(void)
 {
     for (int i = 0; i < NPC_COUNT; i++) {
-        int tx = npc_paths[i][npcs[i].wp][0];
-        int ty = npc_paths[i][npcs[i].wp][1];
+        /* CORREÇÃO AQUI: Multiplicando por TILE na hora de rodar */
+        int tx = npc_paths[i][npcs[i].wp][0] * TILE;
+        int ty = npc_paths[i][npcs[i].wp][1] * TILE;
         int dx = tx - npcs[i].x;
         int dy = ty - npcs[i].y;
         int step = S;
@@ -1192,7 +1194,6 @@ int main(int argc, char *argv[])
     }
 
     if (running && !load_game()) {
-        // defaults
         for (int r = 0; r < FARM_H; r++)
             for (int c = 0; c < FARM_W; c++) {
                 farm_state[r][c] = 0;
@@ -1205,8 +1206,9 @@ int main(int argc, char *argv[])
     pl_x = px; pl_y = py;
 
     for (int i = 0; i < NPC_COUNT; i++) {
-        npcs[i].x = npc_paths[i][0][0];
-        npcs[i].y = npc_paths[i][0][1];
+        /* CORREÇÃO AQUI: Multiplicando por TILE na inicialização */
+        npcs[i].x = npc_paths[i][0][0] * TILE;
+        npcs[i].y = npc_paths[i][0][1] * TILE;
         npcs[i].wp = 1;
         npcs[i].dir = 0;
         npcs[i].timer = 0;
@@ -1279,7 +1281,6 @@ int main(int argc, char *argv[])
         }
 
         if (pausado) {
-            // navegação do menu de pausa
             if (padinfo.status[0]) {
                 if (paddata.BTN_UP)   { if (pause_sel > 0) pause_sel--; }
                 if (paddata.BTN_DOWN) { if (pause_sel < 2) pause_sel++; }
