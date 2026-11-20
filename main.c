@@ -17,7 +17,11 @@
 #define FARM_W     4
 #define FARM_H     3
 #define DAY_FRAMES 5400
-#define NSLOTS     5
+#define NSLOTS     12
+#define ENERGY_MAX 100
+#define COST_HOE   5
+#define COST_CAN   3
+#define COST_SEED  2
 
 static int S = 4;
 #define TILE (16 * S)
@@ -44,11 +48,13 @@ static int frames_dia = 0;
 static int season = 0;
 static int rebuild = 0;
 static int slot = 0;
+static int energia = ENERGY_MAX;
 static int seeds[3] = { 5, 5, 5 };
 static int crops[3] = { 0, 0, 0 };
 static const int grow_need[3] = { 2, 1, 3 };
-static const char crop_ch[3] = { 'r', 'o', 'y' };
-static const char season_icon[4] = { 'k', 'y', 'o', 'v' };
+static const char emblem_ch[3] = { 'r', 'H', 'O' };
+static const char season_col[4] = { 'K', 'y', 'O', 'q' };
+static char emblem = 'r';
 static int pl_x = 0, pl_y = 0;
 
 static const u32 cs_g[4] = { 0x004DAA3C, 0x005DB438, 0x00A5A53A, 0x00E6EEF2 };
@@ -375,6 +381,196 @@ static const char *const spr_pumpkin[16] = {
     "................"
 };
 
+/* ---------- icones do inventario ---------- */
+
+static const char *const spr_i_hoe[16] = {
+    "................",
+    "................",
+    "..........aaaa..",
+    ".........asssSS.",
+    "........assSSS..",
+    "........tsSS....",
+    ".......ttT......",
+    "......ttT.......",
+    ".....ttT........",
+    "....ttT.........",
+    "...ttT..........",
+    "..ttT...........",
+    ".ttT............",
+    ".tT.............",
+    "................",
+    "................"
+};
+
+static const char *const spr_i_can[16] = {
+    "................",
+    "................",
+    "................",
+    "............jj..",
+    "...........jj...",
+    "..........jqj...",
+    ".........jqj....",
+    "...jjjjjjjjj....",
+    "..Sjqqqqqqqqj...",
+    ".SSjqqqqqqqqj...",
+    ".S.jqqqqqqqqj...",
+    ".SSjqqqqqqqqj...",
+    "..Sjjjjjjjjjj...",
+    "....jjjjjjjj....",
+    "................",
+    "................"
+};
+
+static const char *const spr_i_pick[16] = {
+    "................",
+    "................",
+    "..aa........aa..",
+    ".assaaaaaaaassa.",
+    "asSSsssssssSSSsa",
+    ".a..SSSSSSSS..a.",
+    ".......tT.......",
+    ".......tT.......",
+    ".......tT.......",
+    ".......tT.......",
+    ".......tT.......",
+    ".......tT.......",
+    ".......tT.......",
+    ".......tT.......",
+    ".......TT.......",
+    "................"
+};
+
+static const char *const spr_i_axe[16] = {
+    "................",
+    "................",
+    "...aaaaa........",
+    "..asssssStT.....",
+    ".asssssssStT....",
+    ".asssssssStT....",
+    "..aSSSSSSStT....",
+    "...aSSSSS.tT....",
+    "..........tT....",
+    "..........tT....",
+    "..........tT....",
+    "..........tT....",
+    "..........tT....",
+    "..........tT....",
+    "..........TT....",
+    "................"
+};
+
+static const char *const spr_i_scythe[16] = {
+    "................",
+    "................",
+    ".......aaaaaa...",
+    "......assssssa..",
+    ".....aSSSSssssa.",
+    "....tt.....aSSa.",
+    "....tT.......aa.",
+    "....tT..........",
+    "....tT..........",
+    "....tT..........",
+    "....tT..........",
+    "....tT..........",
+    "....tT..........",
+    "....tT..........",
+    "....TT..........",
+    "................"
+};
+
+static const char *const spr_i_packet[16] = {
+    "................",
+    "................",
+    "...ZZZZZZZZZZ...",
+    "...ZCCCCCCCCZ...",
+    "...ZPPPPPPPPZ...",
+    "...ZPPXXXXPPZ...",
+    "...ZPXXXXXXPZ...",
+    "...ZPXXXXXXPZ...",
+    "...ZPPXXXXPPZ...",
+    "...ZPPPFFPPPZ...",
+    "...ZPPFKKFPPZ...",
+    "...ZPPPPPPPPZ...",
+    "...ZPPPPPPPPZ...",
+    "...ZPPPPPPPPZ...",
+    "...ZZZZZZZZZZ...",
+    "................"
+};
+
+static const char *const spr_i_tomato[16] = {
+    "................",
+    ".......F........",
+    "......FKFF......",
+    ".....FFKKFF.....",
+    "....rrrFFrrr....",
+    "...rrrrrrrrrr...",
+    "..rrRRrrrrrrrr..",
+    "..rRRrrrrrrrrr..",
+    "..rRrrrrrrrrrr..",
+    "..rrrrrrrrrrrr..",
+    "..rrrrrrrrrrII..",
+    "...rrrrrrrrII...",
+    "....IIIIIIII....",
+    ".....IIIIII.....",
+    "................",
+    "................"
+};
+
+static const char *const spr_i_carrot[16] = {
+    "................",
+    "......K..K......",
+    ".....KFK.KF.....",
+    "......KFKF......",
+    ".....HHHHHH.....",
+    ".....HHOHHO.....",
+    "....HHHHHHHO....",
+    "....HHOHHHHO....",
+    ".....HHHHHOO....",
+    ".....HHOHHO.....",
+    "......HHHHO.....",
+    "......HOHO......",
+    ".......HO.......",
+    ".......O........",
+    "................",
+    "................"
+};
+
+static const char *const spr_i_pumpkin[16] = {
+    "................",
+    "................",
+    ".......tt.......",
+    "......tTt.......",
+    "....OOOtOOOO....",
+    "..OOHHOOOOHHOO..",
+    ".OOHHHOOOOOHHOO.",
+    ".OHHHOOHHOOOHHO.",
+    ".OHHOOHHHHOOOHO.",
+    ".OHHOOHHHHOOOHO.",
+    ".OOHOOHHHHOOHOO.",
+    ".OOOOOOHHOOOOOO.",
+    "..OVVVVVVVVVVO..",
+    "...VVVVVVVVVV...",
+    "................",
+    "................"
+};
+
+static const char *const spr_bolt[8] = {
+    "...yyy.",
+    "..yyy..",
+    ".yyy...",
+    ".yyyyy.",
+    "...yyy.",
+    "..yy...",
+    "..y....",
+    ".y....."
+};
+
+static const char *const *const item_sprite[NSLOTS] = {
+    spr_i_hoe, spr_i_can, spr_i_pick, spr_i_axe, spr_i_scythe,
+    spr_i_packet, spr_i_packet, spr_i_packet,
+    spr_i_tomato, spr_i_carrot, spr_i_pumpkin, NULL
+};
+
 static u32 pal(char ch)
 {
     switch (ch) {
@@ -396,6 +592,7 @@ static u32 pal(char ch)
     case 't': return 0x006B3F1D;
     case 'T': return 0x004A2A12;
     case 'r': return 0x00D94040;
+    case 'R': return 0x00F26B5B;
     case 'y': return 0x00F2D13A;
     case 'o': return 0x00F08A2A;
     case 'x': return 0x00F5F5F5;
@@ -414,6 +611,16 @@ static u32 pal(char ch)
     case 'i': return 0x00D03030;
     case 'I': return 0x00A02020;
     case 'j': return 0x003A4A9A;
+    case 'q': return 0x005C9CE8;
+    case 'E': return 0x0047C257;
+    case 'U': return 0x007A5C3A;
+    case 'Z': return 0x00302418;
+    case 'F': return 0x00297A2A;
+    case 'K': return 0x0062C050;
+    case 'P': return 0x00F7E9C9;
+    case 'H': return 0x00FFA640;
+    case 'O': return 0x00D2691E;
+    case 'V': return 0x00A8500E;
     default:  return 0x00FF00FF;
     }
 }
@@ -524,29 +731,56 @@ static void draw_sprite(int sx, int sy, const char *const *spr)
         if (!row)
             continue;
         for (int i = 0; i < 16 && row[i]; i++) {
-            if (row[i] == '.')
+            char ch = row[i];
+            if (ch == '.')
                 continue;
-            fill_rect(sx + i * S, sy + j * S, S, S, pal(row[i]));
+            if (ch == 'X')
+                ch = emblem;
+            fill_rect(sx + i * S, sy + j * S, S, S, pal(ch));
         }
     }
 }
 
-static void draw_digit(int ax, int ay, int d, char ch)
+static void draw_small(int ax, int ay, const char *const *rows, int n, char ch)
+{
+    for (int j = 0; j < n; j++) {
+        const char *row = rows[j];
+        for (int i = 0; row[i]; i++)
+            if (row[i] != '.')
+                art_rect(ax + i, ay + j, 1, 1, ch);
+    }
+}
+
+static void draw_digit(int ax, int ay, int d, char ch, int sc)
 {
     if (d < 0 || d > 9)
         return;
     for (int j = 0; j < 5; j++)
         for (int i = 0; i < 3; i++)
             if (font3x5[d][j] & (4 >> i))
-                art_rect(ax + i, ay + j, 1, 1, ch);
+                art_rect(ax + i * sc, ay + j * sc, sc, sc, ch);
 }
 
-static void draw_num2(int ax, int ay, int n, char ch)
+static void draw_count(int rx, int ry, int n)
 {
-    if (n < 0) n = 0;
-    if (n > 99) n = 99;
-    draw_digit(ax, ay, n / 10, ch);
-    draw_digit(ax + 4, ay, n % 10, ch);
+    if (n <= 0)
+        return;
+    if (n > 99)
+        n = 99;
+
+    int two = (n >= 10);
+    int x = rx - (two ? 7 : 3);
+
+    for (int pass = 0; pass < 2; pass++) {
+        int o = (pass == 0) ? 1 : 0;
+        char ch = (pass == 0) ? 'Z' : 'x';
+        if (two) {
+            draw_digit(x + o, ry + o, n / 10, ch, 1);
+            draw_digit(x + 4 + o, ry + o, n % 10, ch, 1);
+        } else {
+            draw_digit(x + o, ry + o, n, ch, 1);
+        }
+    }
 }
 
 static char tile_at(int c, int r)
@@ -833,59 +1067,106 @@ static void darken_frame(int level)
     }
 }
 
+/* relogio e data, canto superior direito */
 static void draw_hud(int minutes)
 {
-    art_rect(1, 1, 58, 14, 'T');
-    art_rect(2, 2, 56, 12, 'c');
+    int aw = (int)fb_width / S;
+    int pw = 42, ph = 33;
+    int x0 = aw - pw - 4;
+    int y0 = 4;
+
+    art_rect(x0, y0, pw, ph, 'T');
+    art_rect(x0 + 1, y0 + 1, pw - 2, ph - 2, 'N');
 
     int h = minutes / 60;
     int m = minutes % 60;
-    draw_digit(3, 3, h / 10, 'T');
-    draw_digit(7, 3, h % 10, 'T');
-    art_rect(11, 4, 1, 1, 'T');
-    art_rect(11, 6, 1, 1, 'T');
-    draw_digit(13, 3, m / 10, 'T');
-    draw_digit(17, 3, m % 10, 'T');
 
-    art_rect(22, 3, 5, 5, season_icon[season]);
-    draw_num2(29, 3, dia, 'I');
+    draw_digit(x0 + 5, y0 + 4, h / 10, 'x', 2);
+    draw_digit(x0 + 13, y0 + 4, h % 10, 'x', 2);
+    art_rect(x0 + 21, y0 + 7, 2, 2, 'c');
+    art_rect(x0 + 21, y0 + 11, 2, 2, 'c');
+    draw_digit(x0 + 25, y0 + 4, m / 10, 'x', 2);
+    draw_digit(x0 + 33, y0 + 4, m % 10, 'x', 2);
 
-    for (int i = 0; i < 3; i++) {
-        int x = 3 + i * 13;
-        art_rect(x, 9, 3, 3, crop_ch[i]);
-        draw_num2(x + 4, 9, crops[i], 'T');
+    art_rect(x0 + 4, y0 + 17, pw - 8, 1, 'U');
+
+    char sc = season_col[season];
+    art_rect(x0 + 6, y0 + 21, 5, 7, sc);
+    art_rect(x0 + 5, y0 + 22, 7, 5, sc);
+
+    int d = dia;
+    if (d > 99) d = 99;
+    draw_digit(x0 + 17, y0 + 20, d / 10, 'c', 2);
+    draw_digit(x0 + 25, y0 + 20, d % 10, 'c', 2);
+}
+
+/* barra de energia, canto inferior direito */
+static void draw_energy(void)
+{
+    int aw = (int)fb_width / S;
+    int ah = (int)fb_height / S;
+    int bw = 10, bh = 52;
+    int x = aw - bw - 4;
+    int y = ah - bh - 4;
+
+    draw_small(x + 2, y - 10, spr_bolt, 8, 'y');
+
+    art_rect(x, y, bw, bh, 'T');
+    art_rect(x + 1, y + 1, bw - 2, bh - 2, 'N');
+
+    int ih = bh - 4;
+    int fh = energia * ih / ENERGY_MAX;
+    if (fh < 0) fh = 0;
+    if (fh > ih) fh = ih;
+
+    char ch = (energia > 50) ? 'E' : (energia > 25) ? 'y' : 'r';
+    if (fh > 0) {
+        art_rect(x + 2, y + 2 + (ih - fh), bw - 4, fh, ch);
+        art_rect(x + 2, y + 2 + (ih - fh), 1, fh, 'K');
     }
 }
 
+/* inventario: 12 espacos, igual ao inicio do Stardew */
 static void draw_hotbar(void)
 {
     int aw = (int)fb_width / S;
     int ah = (int)fb_height / S;
-    int x0 = (aw - (NSLOTS * 14 + (NSLOTS - 1) * 2)) / 2;
-    int y0 = ah - 18;
+    int pitch = 19;
+    int hw = NSLOTS * pitch - 1 + 6;
+    int ex = aw - 10 - 4;
+    int hx = (aw - hw) / 2;
+
+    if (hx + hw > ex - 3)
+        hx = ex - 3 - hw;
+    if (hx < 0)
+        hx = 0;
+
+    int hy = ah - 24 - 4;
+
+    art_rect(hx, hy, hw, 24, 'T');
+    art_rect(hx + 1, hy + 1, hw - 2, 22, 'N');
 
     for (int i = 0; i < NSLOTS; i++) {
-        int x = x0 + i * 16;
+        int x = hx + 3 + i * pitch;
+        int y = hy + 3;
+        int sel = (i == slot);
 
-        art_rect(x - 1, y0 - 1, 16, 16, (i == slot) ? 'y' : 'T');
-        art_rect(x, y0, 14, 14, 'c');
+        art_rect(x, y, 18, 18, sel ? 'y' : 'T');
+        art_rect(x + 1, y + 1, 16, 16, sel ? 'C' : 'U');
 
-        if (i == 0) {
-            art_rect(x + 7, y0 + 3, 2, 9, 't');
-            art_rect(x + 3, y0 + 2, 8, 2, 's');
-            art_rect(x + 3, y0 + 4, 2, 2, 's');
-        } else if (i == 1) {
-            art_rect(x + 3, y0 + 6, 7, 6, 'u');
-            art_rect(x + 10, y0 + 5, 3, 2, 'u');
-            art_rect(x + 3, y0 + 4, 4, 2, 'S');
-            art_rect(x + 12, y0 + 8, 1, 2, 'v');
-        } else {
-            art_rect(x + 2, y0 + 2, 8, 9, 'x');
-            art_rect(x + 3, y0 + 5, 6, 4, crop_ch[i - 2]);
-            art_rect(x + 2, y0 + 2, 8, 2, 'C');
-            art_rect(x + 7, y0 + 8, 7, 5, 'c');
-            draw_num2(x + 7, y0 + 8, seeds[i - 2], 'T');
+        int cnt = -1;
+        if (i >= 5 && i <= 7)
+            cnt = seeds[i - 5];
+        else if (i >= 8 && i <= 10)
+            cnt = crops[i - 8];
+
+        if (item_sprite[i] && cnt != 0) {
+            if (i >= 5 && i <= 7)
+                emblem = emblem_ch[i - 5];
+            draw_sprite((x + 1) * S, (y + 1) * S, item_sprite[i]);
         }
+        if (cnt > 0)
+            draw_count(x + 17, y + 11, cnt);
     }
 }
 
@@ -929,18 +1210,23 @@ static void acao_fazenda(int px, int py)
     }
 
     if (slot == 0) {
-        if (*st == 0)
+        if (*st == 0 && energia >= COST_HOE) {
             *st = 1;
+            energia -= COST_HOE;
+        }
     } else if (slot == 1) {
-        if (*st >= 1)
+        if (*st >= 1 && !farm_water[row][col] && energia >= COST_CAN) {
             farm_water[row][col] = 1;
-    } else {
-        int t = slot - 2;
-        if (*st == 1 && seeds[t] > 0) {
+            energia -= COST_CAN;
+        }
+    } else if (slot >= 5 && slot <= 7) {
+        int t = slot - 5;
+        if (*st == 1 && seeds[t] > 0 && energia >= COST_SEED) {
             seeds[t]--;
             *st = 2;
             farm_type[row][col] = t;
             farm_age[row][col] = 0;
+            energia -= COST_SEED;
         }
     }
 }
@@ -948,6 +1234,8 @@ static void acao_fazenda(int px, int py)
 static void passa_dia(void)
 {
     dia++;
+    energia = ENERGY_MAX;
+
     for (int r = 0; r < FARM_H; r++) {
         for (int c = 0; c < FARM_W; c++) {
             if (farm_state[r][c] == 2 && farm_water[r][c] && farm_age[r][c] < 250)
@@ -1140,6 +1428,7 @@ int main(int argc, char *argv[])
         draw_canopies();
         darken_frame(nivel);
         draw_hud(minutes);
+        draw_energy();
         draw_hotbar();
 
         memcpy(fb_addr[curr_fb], work, bytes);
